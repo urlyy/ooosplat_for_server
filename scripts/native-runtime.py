@@ -64,7 +64,12 @@ def files(root):
 def record(root, backend):
     build = load(ROOT / 'engines/colmap-build.json')
     brush = load(ROOT / 'engines/manifest.linux.json')['brush']
-    metadata = dict(schemaVersion=1, kind='ubuntu22.04-native-source', backend=backend,
+    cuda = load(root / 'CUDA-BUILD.json') if backend == 'cuda' else None
+    if cuda:
+        manifest = load(root / 'manifest.linux.json')
+        manifest['colmap']['cudaCompatibility']['toolkitVersion'] = cuda['release']
+        (root / 'manifest.linux.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    metadata = dict(cuda=cuda, schemaVersion=1, kind='ubuntu22.04-native-source', backend=backend,
                     created=time.time(), architecture=platform.machine(),
                     osRelease=Path('/etc/os-release').read_text(),
                     colmapCommit=build['commit'], brushCommit=brush['commit'],

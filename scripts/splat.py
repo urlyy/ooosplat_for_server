@@ -178,9 +178,11 @@ def display(path, state, lines):
     print(f"任务: {path.name}  状态: {state['status']}")
     print(f"视频: {state['input']}\n模式: {state['quality']}  自动优化: {state['optimize']}")
     event = state.get('event', {})
+    stage_progress = event.get('stageProgress')
+    stage_label = f'{stage_progress}%' if stage_progress is not None else '动态估算'
     print(f"阶段: {event.get('stage', '-')}  总进度: {event.get('progress', 0):.2f}%"
-          f"  阶段进度: {event.get('stageProgress', '-')}%")
-    print(f"详情: {event.get('message', '-')}")
+          f"  阶段进度: {stage_label}")
+    print(f"详情: {event.get('message') or '详见运行详情和最近日志'}")
     if event.get('current') is not None:
         print(f"计数: {event['current']}/{event.get('total')} {event.get('unit', '')}")
     started = state.get('started', state.get('created', time.time()))
