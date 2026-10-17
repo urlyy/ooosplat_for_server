@@ -9,7 +9,7 @@ if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
   chmod 700 "$XDG_RUNTIME_DIR"
 fi
 case "${1:-}" in
-  health|probe|plan|extract|generate)
+  health|probe|plan|estimate|extract|generate)
     exec "$workspace/src-tauri/target/release/splatstudio" "$@" ;;
   *) exec python3 "$workspace/scripts/splat.py" "$@" ;;
 esac

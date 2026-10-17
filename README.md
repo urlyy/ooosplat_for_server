@@ -66,6 +66,23 @@ bash scripts/verify-engines-linux.sh
 
 `NATIVE-BUILD.json` 记录本地构建文件哈希与源码身份，区别于上游 Release 的二进制哈希；不代表经过官方签名或 GPU 验收。`health` 成功也不等于端到端训练成功。
 
+## 运行前比较预计耗时
+
+先用同一段视频比较三档的大概总耗时范围，再选择生成模式：
+
+```bash
+./splat estimate /absolute/path/orbit.mp4
+# 只查看指定模式，或取得机器可读的毫秒数
+./splat estimate /absolute/path/orbit.mp4 --quality high
+./splat estimate /absolute/path/orbit.mp4 --json
+# 如果准备关闭自动优化，估算时也使用相同选项
+./splat estimate /absolute/path/orbit.mp4 --no-optimize
+```
+
+命令会显示 fast / balanced / high 的预计分钟数范围、参考值、计划帧数、置信度和历史样本数。默认按自动优化开启估算，读取视频元数据并复用原产品的估算算法、GPU 显存规划和当前用户的成功任务历史，不抽帧、不提交任务。首次使用没有可比历史时仍会给出范围，但置信度低。新完成的任务会登记到当前用户的项目目录索引以供校准；旧版诊断入口生成但未登记的任务不会自动参与。实际画面内容、优化后的帧数、GPU 性能与负载会影响耗时；范围不包含排队时间和首次引擎编译时间，不是完成时限保证。
+
+选定模式后再执行下方的 `submit`；如估算用了 `--no-optimize`，提交时也加上它。
+
 ## 3. 后台生成与 watch
 
 ```bash

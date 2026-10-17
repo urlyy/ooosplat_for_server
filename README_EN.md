@@ -9,6 +9,7 @@ See [README.md](README.md) for prerequisites. Native build and synthetic-video e
 bash scripts/setup-engines-linux.sh cuda  # alternatively: cpu
 bash scripts/verify-engines-linux.sh
 ./splat health
+./splat estimate /path/to/video.mp4  # compare runtime ranges for all three modes
 JOB=$(./splat submit /path/to/video.mp4 --quality balanced)
 ./splat watch "$JOB"
 ./splat cancel "$JOB"
@@ -19,3 +20,5 @@ Both modes require a working Vulkan GPU for Brush training. The builder compiles
 Native builds are installed as immutable directories under `engines/.native-release-*/`, selected by `engines/native-linux`. Jobs pin the resolved runtime path. Inputs, results and logs persist under `jobs/`. Exiting watch does not cancel a job. Interrupted jobs are not automatically resumed.
 
 The historical `src-tauri/` path now holds a plain Rust crate with no Tauri dependency. Apache-2.0; see LICENSE, NOTICE and `licenses/`.
+
+Before submitting, `./splat estimate VIDEO` compares approximate runtime ranges in minutes using the existing estimator, GPU memory planning and comparable completed task history. It does not extract frames or submit work. Use `--quality fast|balanced|high`, `--json`, or `--no-optimize` as needed; match the optimization setting when submitting. Estimates exclude queue/build time and are uncertain, especially without history.
