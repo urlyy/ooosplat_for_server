@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the pinned engines against the host Ubuntu 22.04 ABI. Never run as root.
+# Build the pinned engines against the host Ubuntu 22.04 ABI.
 set -Eeuo pipefail
 trap 'echo "Native build failed at line $LINENO; build cache retained for diagnosis." >&2' ERR
 workspace="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,7 +9,7 @@ backend="${1:-cuda}"
 # shellcheck source=/dev/null
 source /etc/os-release
 [[ "$ID" == ubuntu && "$VERSION_ID" == 22.04 ]] || { echo 'Build on Ubuntu 22.04 itself, not a newer distribution.' >&2; exit 1; }
-[[ "$EUID" != 0 ]] || { echo 'Run the build as your normal user; only apt installation needs sudo.' >&2; exit 1; }
+[[ "$EUID" != 0 || "${OOOSPLAT_ALLOW_ROOT_BUILD:-0}" == 1 ]] || { echo 'Root-only cloud instance: explicitly set OOOSPLAT_ALLOW_ROOT_BUILD=1.' >&2; exit 1; }
 for command_name in python3 git curl tar cc c++ gfortran make pkg-config node cargo rustup patchelf flock; do
   command -v "$command_name" >/dev/null || { echo "Missing prerequisite: $command_name (see README.md)" >&2; exit 1; }
 done
@@ -20,7 +20,7 @@ exec 9>"$cache/build.lock"
 flock -n 9 || { echo 'Another native build is running.' >&2; exit 1; }
 read_lock() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$workspace/engines/colmap-build.json" "$1"; }
 python3 -m venv "$cache/tools"
-"$cache/tools/bin/pip" install --disable-pip-version-check "cmake==$(read_lock cmakeVersion)" "ninja==$(read_lock ninjaVersion)"
+"$cache/tools/bin/pip" install --disable-pip-version-check "cmake==$(read_lock cmakeVersion)" "ninja==1.13.2"
 export PATH="$cache/tools/bin:$PATH"
 export VCPKG_MAX_CONCURRENCY="${OOOSPLAT_BUILD_JOBS:-4}"
 export VCPKG_DISABLE_METRICS=1
@@ -51,12 +51,12 @@ colmap="$release/linux/colmap"
 mkdir -p "$colmap/lib" "$release/linux/brush"
 options=()
 while IFS= read -r feature; do options+=("-D${feature}_ENABLED=OFF"); done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["disabledFeatures"]))' "$workspace/engines/colmap-build.json")
-cuda_root="${CUDA_PATH:-/usr/local/cuda-13.2}"
+cuda_root="${CUDA_PATH:-/usr/local/cuda}"
 if [[ "$backend" == cuda ]]; then
   export CUDA_PATH="$cuda_root"
   export PATH="$cuda_root/bin:$PATH"
-  node "$workspace/scripts/verify-cuda-toolkit.mjs" linux "$cuda_root"
-  architectures="$(python3 -c 'import json,sys; print(";".join(map(str,json.load(open(sys.argv[1]))["cudaArchitectures"])))' "$workspace/engines/colmap-build.json")"
+  python3 "$workspace/scripts/native-cuda.py" "$cuda_root" > "$cache/cuda.json"
+  architectures="${OOOSPLAT_CUDA_ARCHITECTURES:-native}"
   options+=(-DCUDA_ENABLED=ON -DCASPAR_ENABLED=ON -DCASPAR_USE_DOUBLE=OFF
     "-DCMAKE_CUDA_ARCHITECTURES:STRING=$architectures" "-DCMAKE_CUDA_COMPILER:FILEPATH=$cuda_root/bin/nvcc" "-DCUDAToolkit_ROOT:PATH=$cuda_root")
 else
@@ -69,7 +69,7 @@ cmake -S "$source_dir" -B "$build" -G Ninja \
   -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON "${options[@]}"
 if [[ "$backend" == cuda ]]; then
-  node "$workspace/scripts/verify-cuda-toolkit.mjs" linux "$cuda_root" "$build"
+  python3 "$workspace/scripts/native-cuda.py" "$cuda_root" --build "$build" > "$release/CUDA-BUILD.json"
 fi
 cmake --build "$build" --parallel "$VCPKG_MAX_CONCURRENCY"
 cmake --install "$build"

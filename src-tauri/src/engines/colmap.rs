@@ -132,13 +132,19 @@ async fn run_colmap(
     observer: Option<ProcessObserver>,
 ) -> Result<()> {
     let output = manager
-        .run(ProcessSpec {
-            executable: executable.to_path_buf(),
-            args,
-            working_directory: Some(working_directory.to_path_buf()),
-            log_path: Some(log_path),
-            observer,
-        })
+        .run_with_environment(
+            ProcessSpec {
+                executable: executable.to_path_buf(),
+                args,
+                working_directory: Some(working_directory.to_path_buf()),
+                log_path: Some(log_path),
+                observer,
+            },
+            &[
+                ("OPENBLAS_NUM_THREADS".into(), "1".into()),
+                ("OMP_THREAD_LIMIT".into(), "8".into()),
+            ],
+        )
         .await?;
     if output.success {
         Ok(())
@@ -585,6 +591,10 @@ fn sequential_matching_args(
         gpu_index_option,
     );
     args.extend([
+        // COLMAP overrides OMP_NUM_THREADS during vocabulary indexing. Bound its
+        // explicit worker count to avoid OpenBLAS pool exhaustion on large hosts.
+        OsString::from("--SequentialMatching.num_threads"),
+        OsString::from("8"),
         OsString::from("--SequentialMatching.overlap"),
         OsString::from("10"),
         OsString::from("--SequentialMatching.loop_detection"),

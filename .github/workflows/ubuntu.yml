@@ -17,6 +17,7 @@ jobs:
       - run: npm run test:engine-scripts
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml system_ffprobe_reads_video_and_rotation -- --ignored
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo build --release --locked --manifest-path src-tauri/Cargo.toml --bin splatstudio
       - uses: actions/upload-artifact@v4

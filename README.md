@@ -4,11 +4,11 @@
 
 已移除 React/Tauri GUI、模型预览编辑、HTML/视频导出、MCP 和遥测。`src-tauri/` 只是历史目录名，现为普通 Rust crate，不依赖 Tauri、GTK 或 WebKit。Python 只使用标准库；Node 用于引擎构建检查，不需要安装前端 npm 依赖。
 
-**当前状态：原生部署脚本与文档已准备，尚未在目标 Ubuntu/GPU 环境完成引擎编译和真实视频验收。收到服务器环境后再执行。**
+**已于 2026-10-18 在 Ubuntu 22.04.5 / RTX 5090 / CUDA Toolkit 13.0 完成原生编译和合成视频端到端测试。** 快速档开启自动优化，36/36 帧注册成功，完成 8000 步 Vulkan GPU 训练并输出 `final.ply`。CUDA 12.8 / 13.2 接受构建，但尚未分别实机验证；balanced/high 已检查计划入口，未执行完整训练。详见 [实测记录](docs/ubuntu-smoke-test.md)。
 
 ## 1. 准备 Ubuntu 22.04
 
-使用普通用户构建，只有系统包安装需要 sudo。构建需要访问 GitHub、crates.io、PyPI 和 vcpkg 上游依赖；首次编译较久，源码、缓存和中间产物会占用较多磁盘。默认使用 4 个编译进程，可用 `OOOSPLAT_BUILD_JOBS` 调整。
+通常使用普通用户构建，只有系统包安装需要 sudo。AutoDL 等只提供 root 的实例可显式设置 `export OOOSPLAT_ALLOW_ROOT_BUILD=1`。构建需要访问 GitHub、crates.io、PyPI 和 vcpkg 上游依赖；首次编译较久，源码、缓存和中间产物会占用较多磁盘。默认使用 4 个编译进程，可用 `OOOSPLAT_BUILD_JOBS` 调整。
 
 ```bash
 sudo apt-get update
@@ -26,7 +26,9 @@ sudo apt-get install -y --no-install-recommends \
 - **rustup**：按 [Rust 安装说明](https://www.rust-lang.org/tools/install) 安装。构建脚本会安装并使用 Rust **1.95.0**。
 - **Node.js 22.13+**：从 [Node.js 官方下载页](https://nodejs.org/en/download) 安装；Ubuntu 22.04 默认仓库中的旧 Node 版本不适用。
 - **GPU 驱动与 Vulkan**：Brush 是无窗口 CLI，但训练仍需可用的 Vulkan GPU；先运行 `vulkaninfo --summary` 检查设备。没有桌面会话也可以运行，无需 Xvfb。软件 Vulkan/CPU-only 训练未验收。
-- **CUDA 模式额外要求**：项目锁定 CUDA Toolkit **13.2.0**，包括 `nvcc`，不是只有 NVIDIA 驱动。默认路径 `/usr/local/cuda-13.2`，可设置 `CUDA_PATH`。运行时自动选择 NVIDIA CUDA 的门槛仍是驱动 **580.00+**、Compute Capability **7.5+**。安装驱动/Toolkit 等拿到实际环境后确认，不由脚本自动改动。
+- **CUDA 模式额外要求**：原生构建接受 CUDA Toolkit **12.8 / 13.0 / 13.2**，需要 `nvcc`，不是只有 NVIDIA 驱动。默认路径 `/usr/local/cuda`，可设置 `CUDA_PATH`。默认只为本机 GPU 架构编译（`native`），可用 `OOOSPLAT_CUDA_ARCHITECTURES` 指定其他架构。运行时自动选择 NVIDIA CUDA 的门槛仍是驱动 **580.00+**、Compute Capability **7.5+**。脚本不自动安装或改动驱动/Toolkit。
+
+为避免大核数宿主机上 OpenBLAS 并发池溢出，COLMAP 子进程限制 OpenBLAS 为 1 线程、OpenMP 最多 8 线程，并显式设置闭环检索线程数为 8；闭环匹配仍保持开启。
 
 系统 OpenGL/X11 开发库是 COLMAP 依赖构建所需，不会启用 COLMAP GUI 或启动显示服务。
 
@@ -44,7 +46,7 @@ bash scripts/setup-engines-linux.sh cpu
 
 等价入口是 `npm run setup:native -- cuda` / `npm run setup:native -- cpu`。脚本只接受 Ubuntu 22.04 x86_64，并会：
 
-1. 在项目内的 Python venv 安装锁定 CMake/Ninja，不覆盖系统版本。
+1. 在项目内的 Python venv 安装 CMake 4.3.2 / Ninja 1.13.2，不覆盖系统版本。
 2. 按仓库锁定的 Git commit 获取 COLMAP、vcpkg 和 OOOBrush。
 3. 在本机编译 COLMAP 和其依赖，关闭 GUI/OpenGL 渲染/MVS 等无关功能。
 4. 编译 OOOBrush 的 `brush-cli`，不编译 viewer；再编译 Rust 核心。
