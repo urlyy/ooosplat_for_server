@@ -240,22 +240,17 @@ test("macOS partial install rollback restores both CLI and metadata without touc
   assert.equal(fs.readFileSync(path.join(f.runtime, "bin", "ffprobe"), "utf8"), "keep");
 });
 
-test("installer integration, CLI flags and bundle resources exclude the viewer", () => {
+test("installer integration and CLI flags exclude the viewer", () => {
   const read = file => fs.readFileSync(path.join(workspace, file), "utf8");
-  for (const file of ["scripts/setup-engines.ps1", "scripts/setup-engines-linux.sh", "scripts/build-engines-macos.sh"]) {
-    assert.match(read(file), /brush-runtime\.mjs/);
+  for (const file of ["scripts/setup-engines-linux.sh"]) {
+    assert.match(read(file), /build-native-linux\.sh/);
     assert.doesNotMatch(read(file), /ArthurBrussee\/brush|brush-app-.*tar\.xz/);
   }
-  const linux = JSON.parse(read("src-tauri/tauri.linux.conf.json")).bundle.resources;
-  for (const file of ["brush_app", "LICENSE", "BUILDINFO.json", "INSTALL-INFO.json", "UPSTREAM-SHA256SUMS", "UPSTREAM-README.md"]) {
-    assert.ok(linux[`../engines/linux/brush/${file}`]);
-  }
-  assert.equal(linux["../engines/linux/brush/brush"], undefined);
   const rust = read("src-tauri/src/engines/brush.rs");
   assert.doesNotMatch(rust, /OsString::from\("--total-steps"\)/);
   for (const flag of requiredBrushFlags) assert.ok(rust.includes(`"${flag}"`));
   assert.match(rust, /brush_cli=info,brush_process=info/);
-  for (const file of ["scripts/verify-engines.ps1", "scripts/verify-engines-linux.sh", "scripts/verify-engines-macos.sh"]) {
+  for (const file of ["scripts/verify-engines-linux.sh"]) {
     assert.doesNotMatch(read(file), /--total-steps/);
   }
 });

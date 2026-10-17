@@ -47,28 +47,7 @@ function safeDestination(relative) {
   return destination;
 }
 
-// Windows can briefly deny a directory rename after extraction or CLI probes
-// while runtime files are still being scanned/closed. Retry only sharing/access
-// errors, with a finite budget; never fall back to copying an unverified tree.
-const windowsRenameDelays = [100, 200, 400, 800, 1600, 2000, 2000, 2000];
-export function renameRuntimeDirectory(from, to, {
-  platform = process.platform,
-  rename = fs.renameSync,
-  wait = milliseconds => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds),
-} = {}) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      rename(from, to);
-      return;
-    } catch (error) {
-      if (platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error.code)
-        || attempt >= windowsRenameDelays.length) throw error;
-      wait(windowsRenameDelays[attempt]);
-    }
-  }
-}
-
-export function commitColmapRuntime(staged, destination, verify, rename = renameRuntimeDirectory) {
+export function commitColmapRuntime(staged, destination, verify, rename = fs.renameSync) {
   const temporary = path.dirname(staged);
   const backup = path.join(temporary, "previous-runtime");
   const failed = path.join(temporary, "failed-runtime");
@@ -79,14 +58,8 @@ export function commitColmapRuntime(staged, destination, verify, rename = rename
     installed = true;
     verify(destination);
   } catch (error) {
-    try {
-      if (installed && fs.existsSync(destination)) rename(destination, failed);
-      if (fs.existsSync(backup)) rename(backup, destination);
-    } catch (rollbackError) {
-      throw new Error(`COLMAP installation failed (${error.message}) and rollback failed (${rollbackError.message}); recover the previous runtime from ${backup}`, {
-        cause: new AggregateError([error, rollbackError]),
-      });
-    }
+    if (installed && fs.existsSync(destination)) rename(destination, failed);
+    if (fs.existsSync(backup)) rename(backup, destination);
     throw error;
   }
 }
@@ -126,7 +99,6 @@ export function installColmapRuntime(platform, { localArchive = process.env.OOOS
 
   const temporary = fs.mkdtempSync(path.join(cache, "install-"));
   const staged = path.join(temporary, "runtime");
-  let committed = false;
   try {
     fs.mkdirSync(staged);
     run("tar", ["-xf", archive, "-C", staged], { stdio: "inherit", timeout: 10 * 60_000 });
@@ -136,16 +108,10 @@ export function installColmapRuntime(platform, { localArchive = process.env.OOOS
     if (fs.existsSync(readme)) fs.copyFileSync(readme, path.join(staged, "README.md"));
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     commitColmapRuntime(staged, destination, installedRoot => verifyColmap(installedRoot, platform, expected.integritySha256, { requireRelease: true }));
-    committed = true;
     console.log(`Installed verified ${runtimeLock.releaseTag} into ${expected.destination}`);
     return destination;
   } finally {
-    // A failed rollback must not let cleanup delete the only previous runtime.
-    if (committed || !fs.existsSync(path.join(temporary, "previous-runtime"))) {
-      fs.rmSync(temporary, { recursive: true, force: true });
-    } else {
-      console.error(`COLMAP rollback incomplete; installation files retained in ${temporary}`);
-    }
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 

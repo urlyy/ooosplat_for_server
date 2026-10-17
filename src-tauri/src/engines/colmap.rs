@@ -123,24 +123,14 @@ pub fn require_verified_cli(executable: &Path) -> Result<()> {
     }
 }
 
-pub(crate) async fn run_colmap(
+async fn run_colmap(
     executable: &Path,
-    mut args: Vec<OsString>,
+    args: Vec<OsString>,
     working_directory: &Path,
     log_path: PathBuf,
     manager: &ProcessManager,
     observer: Option<ProcessObserver>,
 ) -> Result<()> {
-    let camera_config = working_directory.join("panorama-camera.json");
-    if args.first().is_some_and(|a| a == "feature_extractor") && camera_config.is_file() {
-        let config: crate::video::panorama::PanoramaCheckpoint =
-            serde_json::from_slice(&tokio::fs::read(camera_config).await?)?;
-        apply_panorama_camera(&mut args, &config);
-    }
-    let operation = args
-        .first()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let output = manager
         .run(ProcessSpec {
             executable: executable.to_path_buf(),
@@ -153,12 +143,15 @@ pub(crate) async fn run_colmap(
     if output.success {
         Ok(())
     } else {
-        Err(SplatError::EngineProcess(Box::new(
-            crate::failure::EngineProcessFailure::from_output(
-                crate::pipeline::PipelineEngine::Colmap,
-                &operation,
-                &output,
-            ),
+        let detail = output.failure_detail();
+        Err(SplatError::Process(format!(
+            "COLMAP 退出码 {:?}{}",
+            output.exit_code,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!("\n{detail}")
+            }
         )))
     }
 }
@@ -231,9 +224,9 @@ async fn run_mapper_with_ceres_fallback(
             .await?;
             Ok(())
         }
-        // Cancellation/start/IO failures retain their own type; an earlier
-        // Caspar failure must not override the final attempt's outcome.
-        Err(error) => Err(error.with_previous_attempt(caspar_error)),
+        Err(ceres_error) => Err(SplatError::Process(format!(
+            "Caspar mapper failed and the automatic Ceres retry also failed.\nCaspar: {caspar_error}\nCeres: {ceres_error}"
+        ))),
     }
 }
 
@@ -249,8 +242,7 @@ fn should_retry_mapper_with_ceres(
     selection: &super::colmap_ba::BaSelection,
     error: &SplatError,
 ) -> bool {
-    selection.gpu_index.is_some()
-        && matches!(error, SplatError::Process(_) | SplatError::EngineProcess(_))
+    selection.gpu_index.is_some() && matches!(error, SplatError::Process(_))
 }
 
 async fn append_log(path: &Path, message: &str) -> Result<()> {
@@ -280,7 +272,6 @@ pub async fn extract_features(
     manager: &ProcessManager,
     observer: Option<ProcessObserver>,
     gpu_index: Option<u32>,
-    camera_params: Option<&str>,
 ) -> Result<()> {
     let (use_gpu_option, gpu_index_option) = feature_gpu_options(executable, manager).await?;
     run_colmap(
@@ -295,7 +286,6 @@ pub async fn extract_features(
             max_image_size,
             max_features,
             None,
-            camera_params,
         ),
         database.parent().unwrap_or(images),
         log,
@@ -318,7 +308,6 @@ pub async fn extract_features_quality_v2(
     manager: &ProcessManager,
     observer: Option<ProcessObserver>,
     gpu_index: Option<u32>,
-    camera_params: Option<&str>,
 ) -> Result<()> {
     let (use_gpu_option, gpu_index_option) = feature_gpu_options(executable, manager).await?;
     run_colmap(
@@ -333,7 +322,6 @@ pub async fn extract_features_quality_v2(
             Some(max_image_size),
             Some(max_features),
             image_list,
-            camera_params,
         ),
         database.parent().unwrap_or(images),
         log,
@@ -489,7 +477,6 @@ fn feature_extraction_args(
     max_image_size: Option<u32>,
     max_features: Option<u32>,
     image_list: Option<&Path>,
-    camera_params: Option<&str>,
 ) -> Vec<OsString> {
     let mut args = vec![
         "feature_extractor".into(),
@@ -516,9 +503,6 @@ fn feature_extraction_args(
     if let Some(image_list) = image_list {
         args.push("--image_list_path".into());
         args.push(image_list.into());
-    }
-    if let Some(params) = camera_params {
-        args.extend(["--ImageReader.camera_params".into(), params.into()]);
     }
     args
 }
@@ -689,20 +673,13 @@ pub async fn map_from_existing(
     input_model: &Path,
     output: &Path,
     automatic_optimization: bool,
-    allow_two_view_tracks: bool,
     log: PathBuf,
     manager: &ProcessManager,
     observer: Option<ProcessObserver>,
     gpu_index: Option<u32>,
 ) -> Result<()> {
     tokio::fs::create_dir_all(output).await?;
-    let ceres_args = mapper_args(
-        database,
-        images,
-        Some(input_model),
-        output,
-        allow_two_view_tracks,
-    );
+    let ceres_args = mapper_args(database, images, Some(input_model), output, false);
     let (args, selection) = with_ba(
         executable,
         database,
@@ -802,23 +779,6 @@ async fn with_ba(
     automatic_optimization: bool,
     log: &Path,
 ) -> Result<(Vec<OsString>, super::colmap_ba::BaSelection)> {
-    // The marker is generated from the persisted pipeline checkpoint, never
-    // from a CLI version string. All mapper paths, including Bridge, share it.
-    if database
-        .parent()
-        .is_some_and(|p| p.join("panorama-camera.json").is_file())
-    {
-        super::colmap_ba::append_explicit_ceres_options(&mut args);
-        args.extend([
-            "--Mapper.init_min_tri_angle".into(),
-            "1".into(),
-            "--Mapper.init_max_forward_motion".into(),
-            "1".into(),
-        ]);
-        let selection = super::colmap_ba::BaSelection {gpu_index:None, detail:"Panorama: explicit local/global CERES; no Caspar; initial triangulation >= 1 degree".into()};
-        append_log(log, &format!("[OOOSplat] {}\n", selection.detail)).await?;
-        return Ok((args, selection));
-    }
     let selection = super::colmap_ba::select_for_mapper(
         executable,
         database,
@@ -830,19 +790,6 @@ async fn with_ba(
     append_log(log, &format!("[OOOSplat] {}\n", selection.detail)).await?;
     tracing::info!("{}", selection.detail);
     Ok((args, selection))
-}
-
-fn apply_panorama_camera(
-    args: &mut Vec<OsString>,
-    config: &crate::video::panorama::PanoramaCheckpoint,
-) {
-    if let Some(i) = args.iter().position(|a| a == "--ImageReader.camera_model") {
-        args[i + 1] = "EQUIRECTANGULAR".into();
-        args.extend([
-            "--ImageReader.camera_params".into(),
-            format!("{},{}", config.sfm_width, config.sfm_height).into(),
-        ]);
-    }
 }
 
 fn incremental_mapper_args(
@@ -875,444 +822,9 @@ fn incremental_mapper_args(
     ]
 }
 
-pub struct ReshootFeatureOptions<'a> {
-    pub images: &'a Path,
-    pub list: &'a Path,
-    pub masks: Option<&'a Path>,
-    pub panorama_dimensions: Option<(u32, u32)>,
-    pub existing_camera_id: Option<u32>,
-    pub max_size: u32,
-    pub max_features: u32,
-}
-
-pub async fn extract_reshoot_group(
-    executable: &Path,
-    database: &Path,
-    options: ReshootFeatureOptions<'_>,
-    log: PathBuf,
-    manager: &ProcessManager,
-    observer: Option<ProcessObserver>,
-    gpu: Option<u32>,
-) -> Result<()> {
-    let (use_gpu, gpu_option) = feature_gpu_options(executable, manager).await?;
-    let focal = if options.panorama_dimensions.is_none() && options.existing_camera_id.is_none() {
-        crate::video::temporary_png_focal_workaround::detect(
-            executable,
-            manager,
-            crate::video::temporary_png_focal_workaround::Request {
-                images: options.images,
-                image_list: Some(options.list),
-                ordinary_images: true,
-                camera_model: "SIMPLE_RADIAL",
-                single_camera: true,
-                explicit_params: None,
-                existing_camera_id: None,
-                calibrated: false,
-            },
-        )
-        .await
-    } else {
-        None
-    };
-    let params = options
-        .panorama_dimensions
-        .map(|(w, h)| format!("{w},{h}"))
-        .or_else(|| focal.as_ref().map(|f| f.camera_params()));
-    let mut args = if let Some(camera_id) = options.existing_camera_id {
-        incremental_feature_extraction_args(
-            database,
-            options.images,
-            options.list,
-            camera_id,
-            options.masks,
-            gpu,
-            use_gpu,
-            gpu_option,
-            Some(options.max_size),
-            Some(options.max_features),
-        )
-    } else {
-        feature_extraction_args(
-            database,
-            options.images,
-            options.masks,
-            gpu,
-            use_gpu,
-            gpu_option,
-            Some(options.max_size),
-            Some(options.max_features),
-            Some(options.list),
-            params.as_deref(),
-        )
-    };
-    if options.panorama_dimensions.is_some() {
-        let index = args
-            .iter()
-            .position(|a| a == "--ImageReader.camera_model")
-            .expect("model argument");
-        args[index + 1] = "EQUIRECTANGULAR".into();
-    }
-    run_colmap(
-        executable,
-        args,
-        database.parent().unwrap_or(options.images),
-        log,
-        manager,
-        observer,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn match_reshoot_candidates(
-    executable: &Path,
-    database: &Path,
-    query_list: &Path,
-    candidates: u32,
-    log: PathBuf,
-    manager: &ProcessManager,
-    observer: Option<ProcessObserver>,
-    gpu: Option<u32>,
-) -> Result<()> {
-    let vocab = vocabulary::prepare(executable, manager.child_token()).await?;
-    let (use_gpu, gpu_option) =
-        matching_gpu_options(executable, "vocab_tree_matcher", manager).await?;
-    let mut args = matching_args("vocab_tree_matcher", database, gpu, use_gpu, gpu_option);
-    args.extend([
-        "--VocabTreeMatching.vocab_tree_path".into(),
-        vocab.into(),
-        "--VocabTreeMatching.match_list_path".into(),
-        query_list.into(),
-        "--VocabTreeMatching.num_images".into(),
-        candidates.to_string().into(),
-    ]);
-    run_colmap(
-        executable,
-        args,
-        database.parent().unwrap_or(Path::new(".")),
-        log,
-        manager,
-        observer,
-    )
-    .await
-}
-
-/// Query only the immutable registered source images, not other new images.
-/// The retriever has no output-file option; consume bounded per-query native
-/// log records before ProcessManager truncates its diagnostic capture.
-#[allow(clippy::too_many_arguments)]
-pub async fn retrieve_reshoot_pairs(
-    executable: &Path,
-    database: &Path,
-    old_names: &[String],
-    new_names: &[String],
-    candidates: u32,
-    log: PathBuf,
-    manager: &ProcessManager,
-    observer: Option<ProcessObserver>,
-) -> Result<Vec<(String, String)>> {
-    use crate::process::ProcessUpdate;
-    use std::{
-        collections::HashSet,
-        sync::{Arc, Mutex},
-    };
-    let directory = database.parent().unwrap_or(Path::new("."));
-    let old_list = directory.join("retrieval-source.txt");
-    let new_list = directory.join("retrieval-query.txt");
-    tokio::fs::write(&old_list, old_names.join("\n")).await?;
-    tokio::fs::write(&new_list, new_names.join("\n")).await?;
-    let vocab = vocabulary::prepare(executable, manager.child_token()).await?;
-    let old: HashSet<_> = old_names.iter().cloned().collect();
-    let new: HashSet<_> = new_names.iter().cloned().collect();
-    let pairs = Arc::new(Mutex::new((None::<String>, 0u32, Vec::new())));
-    let output = pairs.clone();
-    let collector: ProcessObserver = Arc::new(move |update| {
-        if let ProcessUpdate::Line { line, .. } = &update {
-            let mut state = output.lock().expect("retrieval collector");
-            if let Some((_, rest)) = line.split_once("Querying for image ") {
-                state.0 = rest
-                    .rsplit_once(" [")
-                    .map(|(name, _)| name.to_owned())
-                    .filter(|name| new.contains(name));
-                state.1 = 0;
-            } else if let Some((_, rest)) = line.split_once("image_name=") {
-                if let Some((name, _)) = rest.rsplit_once(", score=") {
-                    if old.contains(name) && state.1 < candidates {
-                        if let Some(query) = state.0.clone() {
-                            state.2.push((name.to_owned(), query));
-                            state.1 += 1;
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(observer) = &observer {
-            observer(update);
-        }
-    });
-    run_colmap(
-        executable,
-        vec![
-            "vocab_tree_retriever".into(),
-            "--database_path".into(),
-            database.into(),
-            "--vocab_tree_path".into(),
-            vocab.into(),
-            "--database_image_list_path".into(),
-            old_list.into(),
-            "--query_image_list_path".into(),
-            new_list.into(),
-            "--num_images".into(),
-            candidates.to_string().into(),
-        ],
-        directory,
-        log,
-        manager,
-        Some(collector),
-    )
-    .await?;
-    let result = std::mem::take(&mut pairs.lock().expect("retrieval collector").2);
-    if result.is_empty() && !new_names.is_empty() && !old_names.is_empty() {
-        return Err(SplatError::Process(
-            "COLMAP retrieval returned no verifiable source candidates".into(),
-        ));
-    }
-    Ok(result)
-}
-
-pub struct ReshootMapperOptions<'a> {
-    pub allow_two_view_tracks: bool,
-    pub images: &'a Path,
-    pub input: Option<&'a Path>,
-    pub output: &'a Path,
-    pub image_list: &'a Path,
-    pub fixed_cameras: Option<&'a Path>,
-    pub panorama: bool,
-}
-
-pub async fn map_reshoot(
-    executable: &Path,
-    database: &Path,
-    options: ReshootMapperOptions<'_>,
-    log: PathBuf,
-    manager: &ProcessManager,
-    observer: Option<ProcessObserver>,
-) -> Result<()> {
-    tokio::fs::create_dir_all(options.output).await?;
-    let mut args = mapper_args(
-        database,
-        options.images,
-        options.input,
-        options.output,
-        options.allow_two_view_tracks,
-    );
-    args.extend([
-        "--Mapper.image_list_path".into(),
-        options.image_list.into(),
-        "--Mapper.fix_existing_frames".into(),
-        if options.input.is_some() {
-            "1".into()
-        } else {
-            "0".into()
-        },
-        "--Mapper.ba_refine_principal_point".into(),
-        "0".into(),
-    ]);
-    if let Some(list) = options.fixed_cameras {
-        args.extend(["--Mapper.constant_camera_list_path".into(), list.into()]);
-    }
-    if options.panorama {
-        args.extend([
-            "--Mapper.init_min_tri_angle".into(),
-            "1".into(),
-            "--Mapper.init_max_forward_motion".into(),
-            "1".into(),
-        ]);
-    }
-    super::colmap_ba::append_explicit_ceres_options(&mut args);
-    run_colmap(
-        executable,
-        args,
-        database.parent().unwrap_or(options.images),
-        log,
-        manager,
-        observer,
-    )
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    #[ignore = "Requires the local real PNG and bundled COLMAP; feature extraction only in an isolated database"]
-    async fn native_reshoot_features_confirm_reused_and_independent_camera_ids() {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let source = repo.join(".tmp/focal-diagnosis-20261019/png/images/003A9246.png");
-        let original_hash = crate::video::panorama::fingerprint(&source).unwrap();
-        let dir = tempfile::tempdir_in(repo.join(".cache")).unwrap();
-        let images = dir.path().join("images");
-        std::fs::create_dir(&images).unwrap();
-        for name in ["original.png", "same.png", "different.png"] {
-            std::fs::copy(&source, images.join(name)).unwrap();
-        }
-        let executable = repo.join("engines/colmap/bin/colmap.exe");
-        let database = dir.path().join("database.db");
-        let manager = ProcessManager::default();
-        let mut camera_id = None;
-        for (index, name) in ["original.png", "same.png", "different.png"]
-            .iter()
-            .enumerate()
-        {
-            let list = dir.path().join(format!("group-{index}.txt"));
-            std::fs::write(&list, format!("{name}\n")).unwrap();
-            extract_reshoot_group(
-                &executable,
-                &database,
-                ReshootFeatureOptions {
-                    images: &images,
-                    list: &list,
-                    masks: None,
-                    panorama_dimensions: None,
-                    existing_camera_id: if index == 1 { camera_id } else { None },
-                    max_size: 800,
-                    max_features: 1024,
-                },
-                dir.path().join("features.log"),
-                &manager,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-            let db = rusqlite::Connection::open_with_flags(
-                &database,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )
-            .unwrap();
-            let assigned: u32 = db
-                .query_row(
-                    "SELECT camera_id FROM images WHERE name=?1",
-                    [name],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            let cameras: u32 = db
-                .query_row("SELECT COUNT(*) FROM cameras", [], |row| row.get(0))
-                .unwrap();
-            if index == 0 {
-                camera_id = Some(assigned);
-            }
-            if index == 1 {
-                assert_eq!(Some(assigned), camera_id);
-                assert_eq!(cameras, 1);
-            }
-            if index == 2 {
-                assert_ne!(Some(assigned), camera_id);
-                assert_eq!(cameras, 2);
-            }
-        }
-        assert_eq!(
-            crate::video::panorama::fingerprint(&source).unwrap(),
-            original_hash
-        );
-        eprintln!("Native camera reuse verified: original/same share one camera; different creates a second camera. Original PNG SHA-256 unchanged.");
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires the local Ballintoy DB and bundled vocabulary; read-only retrieval in an isolated copied database"]
-    async fn native_reshoot_retrieval_queries_only_registered_old_images() {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let source = repo.join(".cache/panorama-v1/projects/20261017-191833_ballintoy-erp");
-        let root = tempfile::tempdir_in(repo.join(".cache")).unwrap();
-        let database = root.path().join("database.db");
-        std::fs::copy(source.join("work/colmap/database.db"), &database).unwrap();
-        let images = crate::reconstruction::colmap_model::read_registered_images(
-            &source.join("work/colmap/sparse/0"),
-        )
-        .unwrap();
-        let old: Vec<_> = images.iter().take(5).map(|i| i.name.clone()).collect();
-        let new: Vec<_> = images
-            .iter()
-            .skip(5)
-            .take(2)
-            .map(|i| i.name.clone())
-            .collect();
-        let pairs = retrieve_reshoot_pairs(
-            &repo.join("engines/colmap/bin/colmap.exe"),
-            &database,
-            &old,
-            &new,
-            3,
-            root.path().join("retriever.log"),
-            &ProcessManager::default(),
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(pairs.len(), 6);
-        assert!(pairs
-            .iter()
-            .all(|(a, b)| old.contains(a) && new.contains(b)));
-    }
-
-    #[test]
-    fn panorama_camera_uses_model_17_dimensions_without_a_fake_focal_length() {
-        let config = crate::video::panorama::PanoramaCheckpoint {
-            version: 1,
-            source_sha256: "test".into(),
-            image_sources: None,
-            sfm_width: 2048,
-            sfm_height: 1024,
-            face_size: 512,
-            field_of_view_degrees: 92.,
-        };
-        let mut args = feature_extraction_args(
-            Path::new("database.db"),
-            Path::new("frames"),
-            None,
-            Some(2),
-            "--FeatureExtraction.use_gpu",
-            "--FeatureExtraction.gpu_index",
-            Some(2048),
-            Some(8192),
-            None,
-            None,
-        );
-        apply_panorama_camera(&mut args, &config);
-        let args = strings(args);
-        assert!(args
-            .windows(2)
-            .any(|p| p == ["--ImageReader.camera_model", "EQUIRECTANGULAR"]));
-        assert!(args
-            .windows(2)
-            .any(|p| p == ["--ImageReader.camera_params", "2048,1024"]));
-        assert!(args
-            .windows(2)
-            .any(|p| p == ["--FeatureExtraction.gpu_index", "2"]));
-    }
-    #[tokio::test]
-    async fn panorama_mapper_and_bridge_bypass_caspar_even_with_optimization_and_gpu_enabled() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join("panorama-camera.json"), b"{}").unwrap();
-        let (args, selection) = with_ba(
-            Path::new("not-launched"),
-            &temp.path().join("database.db"),
-            vec!["mapper".into()],
-            Some(2),
-            true,
-            &temp.path().join("log"),
-        )
-        .await
-        .unwrap();
-        assert!(selection.gpu_index.is_none());
-        let args = strings(args);
-        for option in ["--Mapper.ba_local_backend", "--Mapper.ba_global_backend"] {
-            assert!(args.windows(2).any(|p| p == [option, "CERES"]));
-        }
-        assert!(!args.iter().any(|a| a == "CASPAR"));
-    }
 
     #[test]
     fn locked_runtime_identity_matches_the_shared_build_lock() {
@@ -1353,7 +865,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         ));
         assert!(extraction
             .windows(2)
@@ -1386,7 +897,6 @@ mod tests {
             None,
             "--FeatureExtraction.use_gpu",
             "--FeatureExtraction.gpu_index",
-            None,
             None,
             None,
             None,
@@ -1529,7 +1039,7 @@ mod tests {
         let working = temporary.path().join("中文 loop check with spaces");
         let images = working.join("images");
         std::fs::create_dir_all(&images).unwrap();
-        let picture = std::fs::read(workspace.join("src-tauri/icons/128x128.png")).unwrap();
+        let picture = std::fs::read(workspace.join("scripts/fixtures/colmap-test.png")).unwrap();
         for index in 1..=12 {
             std::fs::write(images.join(format!("frame_{index:06}.png")), &picture).unwrap();
         }
@@ -1548,7 +1058,6 @@ mod tests {
             4096,
             log.clone(),
             &manager,
-            None,
             None,
             None,
         )
@@ -1609,7 +1118,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         ));
         assert!(extraction
             .windows(2)
@@ -1631,7 +1139,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         ));
         assert!(extraction
             .windows(2)
@@ -1639,34 +1146,6 @@ mod tests {
         assert!(extraction
             .windows(2)
             .any(|pair| pair == ["--image_path", "../colmap_frames"]));
-    }
-
-    #[test]
-    fn optional_camera_parameters_preserve_explicit_values_masks_gpu_and_limits() {
-        let args = |params| {
-            feature_extraction_args(
-                Path::new("database.db"),
-                Path::new("../colmap_frames"),
-                Some(Path::new("../masks")),
-                Some(0),
-                "--FeatureExtraction.use_gpu",
-                "--FeatureExtraction.gpu_index",
-                Some(1600),
-                Some(8192),
-                Some(Path::new("chosen.txt")),
-                params,
-            )
-        };
-        let original = args(None);
-        assert!(!original
-            .iter()
-            .any(|arg| arg == "--ImageReader.camera_params"));
-        // The builder must not reinterpret or replace an explicit calibration.
-        let explicit = "1234.5,400,300,-0.01";
-        let mut overridden = args(Some(explicit));
-        assert_eq!(overridden.pop().unwrap(), explicit);
-        assert_eq!(overridden.pop().unwrap(), "--ImageReader.camera_params");
-        assert_eq!(overridden, original);
     }
 
     #[test]
@@ -1681,7 +1160,6 @@ mod tests {
             Some(1600),
             Some(4096),
             Some(Path::new("bridge-images.txt")),
-            None,
         ));
         assert!(extraction
             .windows(2)
@@ -1716,7 +1194,6 @@ mod tests {
                 use_gpu_option,
                 gpu_index_option,
                 Some(1200),
-                None,
                 None,
                 None,
             ));
@@ -1865,25 +1342,6 @@ mod tests {
             &caspar,
             &SplatError::Cancelled
         ));
-        let output = crate::process::ProcessOutput {
-            success: false,
-            exit_code: Some(-1073740940),
-            termination: crate::process::ProcessTermination {
-                exit_code: Some(-1073740940),
-                windows_status: Some("0xC0000374".into()),
-                ..Default::default()
-            },
-            stdout: String::new(),
-            stderr: "Could not register image".into(),
-        };
-        let error =
-            SplatError::EngineProcess(Box::new(crate::failure::EngineProcessFailure::from_output(
-                crate::pipeline::PipelineEngine::Colmap,
-                "mapper",
-                &output,
-            )));
-        assert!(should_retry_mapper_with_ceres(&caspar, &error));
-        assert!(!should_retry_mapper_with_ceres(&ceres, &error));
     }
 
     #[tokio::test]

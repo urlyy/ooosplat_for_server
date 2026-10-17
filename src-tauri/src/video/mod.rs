@@ -1,11 +1,7 @@
 pub mod extract;
 pub mod frame_plan;
-pub mod gps;
-pub mod image_projection;
 pub mod image_sequence;
-pub mod panorama;
 pub mod probe;
-pub(crate) mod temporary_png_focal_workaround;
 
 pub use frame_plan::{
     minimum_selected_frames, FramePlan, FrameSelectionStrategy, PlannedFrame,

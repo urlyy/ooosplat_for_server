@@ -1,13 +1,16 @@
-use std::path::PathBuf;
+use std::{io::Write, path::PathBuf, sync::Mutex};
 
 use clap::{Parser, Subcommand};
 use ooo_splat::{
-    engines::{ffmpeg::extract_selected_frames, ffprobe::probe_video},
+    engines::{ffmpeg::extract_uniform_frames, ffprobe::probe_video},
     error::{Result, SplatError},
     pipeline::runner::{default_engine_paths, PipelineRunner},
     presets::Quality,
     process::ProcessManager,
-    video::{analyze_image_sequence, create_image_plan, prepare_image_sequence},
+    video::{
+        analyze_image_sequence, create_image_plan, prepare_image_sequence, FrameSelectionStrategy,
+        UniformRatioFrameSelection,
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -20,25 +23,6 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Debug, clap::Args)]
-struct PolicyArgs {
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    auto_retry: bool,
-    /// Fraction of source frames for the first extraction (0.001..=1).
-    #[arg(long)]
-    frame_sampling_ratio: Option<f64>,
-}
-impl PolicyArgs {
-    fn policy(&self) -> Result<ooo_splat::pipeline::generation_policy::GenerationPolicy> {
-        ooo_splat::pipeline::generation_policy::GenerationPolicy {
-            auto_retry_enabled: self.auto_retry,
-            frame_sampling_ratio: self.frame_sampling_ratio,
-            ..Default::default()
-        }
-        .validate()
-    }
-}
-
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Validate FFmpeg, FFprobe, CPU COLMAP and Brush.
@@ -47,16 +31,12 @@ enum Commands {
     Probe { input: PathBuf },
     /// Show the video frame plan or image-sequence plan.
     Plan {
-        #[command(flatten)]
-        policy: PolicyArgs,
         input: PathBuf,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
         quality: Quality,
     },
     /// Prepare video frames or an image sequence and optional COLMAP masks.
     Extract {
-        #[command(flatten)]
-        policy: PolicyArgs,
         input: PathBuf,
         output: PathBuf,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
@@ -64,16 +44,18 @@ enum Commands {
     },
     /// Run the end-to-end pipeline after all fixed engine CLIs are verified.
     Generate {
-        #[command(flatten)]
-        policy: PolicyArgs,
         input: PathBuf,
-        /// Override the remembered projects root (useful for diagnostics).
+        /// Output directory (defaults to ./projects).
         #[arg(long)]
         projects_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
         quality: Quality,
-        #[arg(long, value_enum, default_value_t = ooo_splat::video::panorama::VideoProjection::Auto)]
-        video_projection: ooo_splat::video::panorama::VideoProjection,
+        /// Disable automatic frame/resolution/training optimization.
+        #[arg(long)]
+        no_optimize: bool,
+        /// Persist full progress events as newline-delimited JSON.
+        #[arg(long)]
+        events: Option<PathBuf>,
     },
 }
 
@@ -81,6 +63,7 @@ enum Commands {
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .with_target(false)
         .init();
     if let Err(error) = execute(Cli::parse()).await {
@@ -93,10 +76,11 @@ async fn execute(cli: Cli) -> Result<()> {
     let engines = default_engine_paths(cli.engine_dir);
     match cli.command {
         Commands::Health => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&engines.check_all().await)?
-            );
+            let status = engines.check_all().await;
+            println!("{}", serde_json::to_string_pretty(&status)?);
+            if status.iter().any(|engine| !engine.can_start) {
+                return Err(SplatError::Process("引擎检查失败，请查看上面的详情".into()));
+            }
         }
         Commands::Probe { input } => {
             if input.is_dir() {
@@ -110,28 +94,21 @@ async fn execute(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&video)?);
             }
         }
-        Commands::Plan {
-            input,
-            quality,
-            policy,
-        } => {
-            let policy = policy.policy()?;
+        Commands::Plan { input, quality } => {
             let plan = if input.is_dir() {
                 create_image_plan(&analyze_image_sequence(&input)?, &quality.preset())
             } else {
                 let video =
                     probe_video(&engines.ffprobe, &input, None, &ProcessManager::new()).await?;
-                policy.frame_plan(&video, quality)
+                UniformRatioFrameSelection.create_plan(&video, &quality.preset())
             };
             println!("{}", serde_json::to_string_pretty(&plan)?);
         }
         Commands::Extract {
-            policy,
             input,
             output,
             quality,
         } => {
-            let policy = policy.policy()?;
             let masks = output
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
@@ -154,22 +131,16 @@ async fn execute(cli: Cli) -> Result<()> {
             ensure_engine(&engines.ffprobe)?;
             ensure_engine(&engines.ffmpeg)?;
             let video = probe_video(&engines.ffprobe, &input, None, &ProcessManager::new()).await?;
-            let plan = policy.frame_plan(&video, quality);
-            let (w, h) = if video.rotation.rem_euclid(180) == 90 {
-                (video.height, video.width)
-            } else {
-                (video.width, video.height)
-            };
-            let resolution = policy.resolution(quality, None, w, h, true);
-            let extraction = extract_selected_frames(
+            let plan = UniformRatioFrameSelection.create_plan(&video, &quality.preset());
+            let extraction = extract_uniform_frames(
                 &engines.ffmpeg,
                 &input,
                 &output,
                 &colmap_frames,
                 &masks,
-                &plan.selected_frames,
+                &plan,
                 video.has_alpha,
-                Some((resolution.working_width, resolution.working_height)),
+                None,
                 None,
                 &ProcessManager::new(),
                 None,
@@ -192,33 +163,47 @@ async fn execute(cli: Cli) -> Result<()> {
             }
         }
         Commands::Generate {
-            policy,
             input,
             projects_root,
             quality,
-            video_projection,
+            no_optimize,
+            events,
         } => {
-            let runner = PipelineRunner::new(engines, |event| {
+            let event_file = events
+                .map(|path| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                })
+                .transpose()?
+                .map(Mutex::new);
+            let runner = PipelineRunner::new_with_planner(engines, !no_optimize, move |event| {
+                if let Some(file) = &event_file {
+                    let mut file = file.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Err(error) = serde_json::to_writer(&mut *file, &event)
+                        .map_err(std::io::Error::other)
+                        .and_then(|_| file.write_all(b"\n"))
+                        .and_then(|_| file.flush())
+                    {
+                        eprintln!("progress write failed: {error}");
+                    }
+                }
                 eprintln!(
                     "{:>6.2}% {:?}: {}",
                     event.progress, event.stage, event.message
                 );
-            })
-            .with_video_projection(video_projection)
-            .with_generation_policy(Some(policy.policy()?));
-            let result = match projects_root {
-                Some(root) => {
-                    runner
-                        .generate_for_diagnostics(&input, quality, &root)
-                        .await?
+            });
+            let root = projects_root.unwrap_or_else(|| PathBuf::from("projects"));
+            let run = runner.generate_for_diagnostics(&input, quality, &root);
+            tokio::pin!(run);
+            let result = tokio::select! {
+                result = &mut run => result,
+                _ = shutdown_signal() => {
+                    runner.cancel();
+                    run.await
                 }
-                None => {
-                    let root = ooo_splat::project::catalog::load_settings()
-                        .await?
-                        .projects_root;
-                    runner.generate(&input, quality, &root).await?
-                }
-            };
+            }?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
@@ -231,4 +216,19 @@ fn ensure_engine(path: &std::path::Path) -> Result<()> {
     } else {
         Err(SplatError::EngineMissing(path.display().to_string()))
     }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

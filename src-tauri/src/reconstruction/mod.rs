@@ -1,9 +1,5 @@
 pub mod colmap_model;
-pub mod edit_mask;
-pub mod gps;
 pub mod ply;
-pub mod reference_view;
-pub mod splat_transform;
 pub mod validator;
 
 pub use validator::{

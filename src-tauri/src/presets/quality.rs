@@ -65,8 +65,6 @@ pub struct ResolvedBrushTrainingPreset {
     pub profile: BrushTrainingProfile,
     pub detected_total_memory_mb: Option<u64>,
     pub configured_max_splats: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub panorama: Option<super::PanoramaTrainingSnapshot>,
     pub preset: BrushTrainingPreset,
 }
 
@@ -95,12 +93,6 @@ impl PlannerResolutionPlan {
 
 impl ResolvedBrushTrainingPreset {
     pub fn downgrade_after_oom(self, initial_sfm_points: u64) -> Option<Self> {
-        if self.panorama.is_some() {
-            return super::panorama_training::downgrade_panorama_after_oom(
-                self,
-                initial_sfm_points,
-            );
-        }
         if self.profile == BrushTrainingProfile::Legacy {
             return None;
         }
@@ -175,7 +167,6 @@ pub fn resolve_brush_training_preset(
             profile: BrushTrainingProfile::Legacy,
             detected_total_memory_mb,
             configured_max_splats: None,
-            panorama: None,
             preset: BrushTrainingPreset {
                 total_steps: base.brush_iterations,
                 max_resolution: base.brush_max_resolution,
@@ -320,7 +311,6 @@ fn resolved_quality_profile(
         profile,
         detected_total_memory_mb,
         configured_max_splats: profile_config.max_splats,
-        panorama: None,
         preset: BrushTrainingPreset {
             total_steps: profile_config.total_steps,
             max_resolution: initial_max_resolution.max(1),
@@ -349,7 +339,6 @@ fn resolve_high_profile(
         profile,
         detected_total_memory_mb,
         configured_max_splats: Some(cap),
-        panorama: None,
         preset: BrushTrainingPreset {
             total_steps: profile_config.total_steps,
             max_resolution: profile_config.max_resolution.resolve(source_long_edge),

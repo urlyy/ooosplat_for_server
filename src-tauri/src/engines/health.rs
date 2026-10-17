@@ -211,7 +211,7 @@ impl EnginePaths {
         paths
     }
 
-    fn from_candidates(root: PathBuf) -> Self {
+    pub fn from_candidates(root: PathBuf) -> Self {
         #[cfg(windows)]
         let paths = {
             // Windows releases are self-contained. Never let a missing bundled
@@ -397,13 +397,7 @@ async fn check_basic(kind: EngineKind, path: &Path, args: &[&str]) -> EngineStat
                 detail: if output.success {
                     "引擎可启动".into()
                 } else {
-                    format!(
-                        "帮助命令退出码：{}\n{}",
-                        output
-                            .exit_code
-                            .map_or_else(|| "N/A".into(), |code| code.to_string()),
-                        output.failure_detail()
-                    )
+                    format!("帮助命令退出码：{:?}", output.exit_code)
                 },
             }
         }
@@ -1055,10 +1049,6 @@ fn choose_acceleration(
         device,
         requirements,
     )
-}
-
-pub(crate) async fn diagnostic_gpu_devices() -> Vec<GpuDeviceInfo> {
-    probe_gpu_devices().await.unwrap_or_default()
 }
 
 async fn probe_gpu_devices() -> std::result::Result<Vec<GpuDeviceInfo>, ProbeError> {

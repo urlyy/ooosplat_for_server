@@ -1,7 +1,5 @@
 # Auto Optimize parameter configuration
 
-> New runs use the [generation defaults and retry policy](GENERATION_POLICY.md). Legacy VRAM tiers, optimization-off recipes and profile downgrades below remain for historical snapshot compatibility. New Detailed runs use source resolution and the [effective-pixel budget (k=0.5)](FINE_SPLAT_BUDGET.md) for ordinary media; panoramas retain 40× sparse points. Automatic retry authorizes point reductions or reshoot-plan fallbacks only. Fast/Balanced retain their optimized recipes.
-
 Reconstruction and training presets are defined in [`config/pipeline-optimization.json`](../config/pipeline-optimization.json). The configuration is embedded at build time. Developers can set `OOOSPLAT_PIPELINE_CONFIG` to an external JSON file before starting the app; restart after changes. Missing, malformed, unknown, or unsafe settings are rejected as a whole, with a message explaining the fallback to embedded defaults. `schemaVersion` remains `1`.
 
 ```powershell
@@ -10,8 +8,6 @@ npm run dev:local
 ```
 
 ## Auto Optimize off
-
-Panorama videos and images use the separate optional `panoramaTraining` configuration, not the ordinary Brush presets below. `maxSplatsWithoutOptimization` defaults to 1M / 2M / 3M and applies only with Auto Optimize off. `maxSplats` retains the 1M / 5M / 10M tier ceilings with optimization on, further limited by quality-specific VRAM budgets. Iterations remain 12k / 30k / 45k. See [panorama recipes and validation](PANORAMA_IMAGES_V1.md#全景训练配方-v1) for the full budget table, initial-point overrides and one-shot OOM retries. Older external configurations missing the panorama section or the new off-mode fields use the corresponding embedded defaults; saved task recipes are not rewritten.
 
 Videos use the original fixed-ratio sampling. Initial reconstruction and reshoots share the preset's SFM limits. Candidate pools, Bridge, staged resolutions, loop detection, Caspar BA, and automatic High OOM retries are disabled. Image sequences retain all valid images and use exhaustive matching.
 
