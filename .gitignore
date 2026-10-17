@@ -30,3 +30,14 @@ engines/linux/colmap/**
 dist-engines/
 engines/macos/arm64/**
 !engines/macos/arm64/README.md
+
+# Server job data
+jobs/
+data/
+__pycache__/
+*.pyc
+
+# Host-built immutable native runtimes
+engines/.native-release-*/
+engines/.native-link-*
+engines/native-linux

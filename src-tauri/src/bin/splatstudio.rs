@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Write, path::PathBuf, sync::Mutex};
 
 use clap::{Parser, Subcommand};
 use ooo_splat::{
@@ -45,11 +45,17 @@ enum Commands {
     /// Run the end-to-end pipeline after all fixed engine CLIs are verified.
     Generate {
         input: PathBuf,
-        /// Override the remembered projects root (useful for diagnostics).
+        /// Output directory (defaults to ./projects).
         #[arg(long)]
         projects_root: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
         quality: Quality,
+        /// Disable automatic frame/resolution/training optimization.
+        #[arg(long)]
+        no_optimize: bool,
+        /// Persist full progress events as newline-delimited JSON.
+        #[arg(long)]
+        events: Option<PathBuf>,
     },
 }
 
@@ -57,6 +63,7 @@ enum Commands {
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .with_target(false)
         .init();
     if let Err(error) = execute(Cli::parse()).await {
@@ -69,10 +76,11 @@ async fn execute(cli: Cli) -> Result<()> {
     let engines = default_engine_paths(cli.engine_dir);
     match cli.command {
         Commands::Health => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&engines.check_all().await)?
-            );
+            let status = engines.check_all().await;
+            println!("{}", serde_json::to_string_pretty(&status)?);
+            if status.iter().any(|engine| !engine.can_start) {
+                return Err(SplatError::Process("引擎检查失败，请查看上面的详情".into()));
+            }
         }
         Commands::Probe { input } => {
             if input.is_dir() {
@@ -158,26 +166,44 @@ async fn execute(cli: Cli) -> Result<()> {
             input,
             projects_root,
             quality,
+            no_optimize,
+            events,
         } => {
-            let runner = PipelineRunner::new(engines, |event| {
+            let event_file = events
+                .map(|path| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                })
+                .transpose()?
+                .map(Mutex::new);
+            let runner = PipelineRunner::new_with_planner(engines, !no_optimize, move |event| {
+                if let Some(file) = &event_file {
+                    let mut file = file.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Err(error) = serde_json::to_writer(&mut *file, &event)
+                        .map_err(std::io::Error::other)
+                        .and_then(|_| file.write_all(b"\n"))
+                        .and_then(|_| file.flush())
+                    {
+                        eprintln!("progress write failed: {error}");
+                    }
+                }
                 eprintln!(
                     "{:>6.2}% {:?}: {}",
                     event.progress, event.stage, event.message
                 );
             });
-            let result = match projects_root {
-                Some(root) => {
-                    runner
-                        .generate_for_diagnostics(&input, quality, &root)
-                        .await?
+            let root = projects_root.unwrap_or_else(|| PathBuf::from("projects"));
+            let run = runner.generate_for_diagnostics(&input, quality, &root);
+            tokio::pin!(run);
+            let result = tokio::select! {
+                result = &mut run => result,
+                _ = shutdown_signal() => {
+                    runner.cancel();
+                    run.await
                 }
-                None => {
-                    let root = ooo_splat::project::catalog::load_settings()
-                        .await?
-                        .projects_root;
-                    runner.generate(&input, quality, &root).await?
-                }
-            };
+            }?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
@@ -190,4 +216,19 @@ fn ensure_engine(path: &std::path::Path) -> Result<()> {
     } else {
         Err(SplatError::EngineMissing(path.display().to_string()))
     }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

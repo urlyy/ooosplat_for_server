@@ -1039,7 +1039,7 @@ mod tests {
         let working = temporary.path().join("中文 loop check with spaces");
         let images = working.join("images");
         std::fs::create_dir_all(&images).unwrap();
-        let picture = std::fs::read(workspace.join("src-tauri/icons/128x128.png")).unwrap();
+        let picture = std::fs::read(workspace.join("scripts/fixtures/colmap-test.png")).unwrap();
         for index in 1..=12 {
             std::fs::write(images.join(format!("frame_{index:06}.png")), &picture).unwrap();
         }

@@ -97,8 +97,6 @@ pub struct PipelineResult {
     pub completed_at: chrono::DateTime<Utc>,
     pub warning: Option<String>,
     pub logs_directory: PathBuf,
-    #[serde(skip)]
-    pub(crate) source_duration_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2163,7 +2161,6 @@ impl PipelineRunner {
             completed_at,
             warning,
             logs_directory: paths.logs.clone(),
-            source_duration_seconds: None,
         })
     }
 
@@ -2284,7 +2281,6 @@ impl PipelineRunner {
                 project_manager.write_state(&paths.state, &state).await?;
                 prepared
             };
-        let source_duration_seconds = prepared.video.as_ref().map(|video| video.duration);
         self.record_frame_metrics(&state, prepared.extracted_frames, Some(&prepared.plan));
 
         let database = paths.colmap.join("database.db");
@@ -2776,7 +2772,6 @@ impl PipelineRunner {
             completed_at,
             warning,
             logs_directory: paths.logs.clone(),
-            source_duration_seconds,
         })
     }
 
@@ -4689,7 +4684,7 @@ async fn prepare_brush_dataset(root: &Path, frames: &Path, model: &Path) -> Resu
 
 pub fn default_engine_paths(engine_root: Option<PathBuf>) -> EnginePaths {
     engine_root
-        .map(EnginePaths::from_root)
+        .map(EnginePaths::from_candidates)
         .unwrap_or_else(|| EnginePaths::discover(None))
 }
 

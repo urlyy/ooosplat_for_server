@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+workspace="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export OOOSPLAT_ENGINE_DIR="${OOOSPLAT_ENGINE_DIR:-$workspace/engines/native-linux}"
+# Vulkan needs no window server. Use a private per-user runtime directory.
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+  export XDG_RUNTIME_DIR="${TMPDIR:-/tmp}/splat-runtime-$(id -u)"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+fi
+case "${1:-}" in
+  health|probe|plan|extract|generate)
+    exec "$workspace/src-tauri/target/release/splatstudio" "$@" ;;
+  *) exec python3 "$workspace/scripts/splat.py" "$@" ;;
+esac

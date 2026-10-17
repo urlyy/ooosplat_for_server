@@ -13,7 +13,7 @@ fs.mkdirSync(path.join(root, "images"), { recursive: true });
 fs.mkdirSync(path.join(root, "masks"));
 try {
   fs.writeFileSync(path.join(root, "images/jpeg_frame.jpg"), Buffer.from(fixtures.jpeg, "base64"));
-  fs.copyFileSync(path.join(workspace, "src-tauri/icons/128x128.png"), path.join(root, "images/png_frame.png"));
+  fs.copyFileSync(path.join(workspace, "scripts/fixtures/colmap-test.png"), path.join(root, "images/png_frame.png"));
   for (const name of ["jpeg_frame.jpg", "png_frame.png"]) fs.writeFileSync(path.join(root, "masks", `${name}.png`), Buffer.from(fixtures.mask, "base64"));
   // Relative ASCII image paths preserve the production Windows Unicode-path
   // workaround, while the actual working directory contains Unicode/spaces.

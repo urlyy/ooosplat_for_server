@@ -111,8 +111,6 @@ fn runtime_sample_frame_count(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    #[serde(default)]
-    pub mcp: crate::mcp::McpSettings,
     pub schema_version: u32,
     pub projects_root: PathBuf,
     #[serde(default = "default_planner_enabled")]
@@ -276,7 +274,6 @@ pub async fn load_settings() -> Result<AppSettings> {
         }
     }
     Ok(AppSettings {
-        mcp: Default::default(),
         schema_version: 2,
         projects_root: default_projects_root()?,
         planner_enabled: true,
@@ -701,7 +698,6 @@ mod tests {
     #[test]
     fn default_summary_shape_is_serializable() {
         let value = AppSettings {
-            mcp: Default::default(),
             schema_version: 1,
             planner_enabled: true,
             projects_root: PathBuf::from("C:/项目 Root"),

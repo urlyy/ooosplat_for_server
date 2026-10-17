@@ -211,7 +211,7 @@ impl EnginePaths {
         paths
     }
 
-    fn from_candidates(root: PathBuf) -> Self {
+    pub fn from_candidates(root: PathBuf) -> Self {
         #[cfg(windows)]
         let paths = {
             // Windows releases are self-contained. Never let a missing bundled
@@ -1049,10 +1049,6 @@ fn choose_acceleration(
         device,
         requirements,
     )
-}
-
-pub(crate) async fn diagnostic_gpu_devices() -> Vec<GpuDeviceInfo> {
-    probe_gpu_devices().await.unwrap_or_default()
 }
 
 async fn probe_gpu_devices() -> std::result::Result<Vec<GpuDeviceInfo>, ProbeError> {
