@@ -2,14 +2,20 @@ use std::{io::Write, path::PathBuf, sync::Mutex};
 
 use clap::{Parser, Subcommand};
 use ooo_splat::{
+    engines::health::check_colmap_acceleration_cached,
     engines::{ffmpeg::extract_uniform_frames, ffprobe::probe_video},
     error::{Result, SplatError},
+    pipeline::estimate::estimate_runtime_with_brush_and_resolution,
     pipeline::runner::{default_engine_paths, PipelineRunner},
-    presets::Quality,
+    presets::{
+        resolve_brush_training_preset, resolve_brush_training_preset_for_plan,
+        resolve_planner_resolution_plan, Quality,
+    },
     process::ProcessManager,
+    project::catalog,
     video::{
         analyze_image_sequence, create_image_plan, prepare_image_sequence, FrameSelectionStrategy,
-        UniformRatioFrameSelection,
+        QualityV2FrameSelection, UniformRatioFrameSelection,
     },
 };
 
@@ -34,6 +40,19 @@ enum Commands {
         input: PathBuf,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
         quality: Quality,
+    },
+    /// Compare estimated total runtime ranges before choosing a video quality.
+    Estimate {
+        input: PathBuf,
+        /// Estimate only one mode (default: compare all three).
+        #[arg(long, value_enum)]
+        quality: Option<Quality>,
+        /// Match submit --no-optimize.
+        #[arg(long)]
+        no_optimize: bool,
+        /// Print structured estimates in milliseconds.
+        #[arg(long)]
+        json: bool,
     },
     /// Prepare video frames or an image sequence and optional COLMAP masks.
     Extract {
@@ -103,6 +122,93 @@ async fn execute(cli: Cli) -> Result<()> {
                 UniformRatioFrameSelection.create_plan(&video, &quality.preset())
             };
             println!("{}", serde_json::to_string_pretty(&plan)?);
+        }
+        Commands::Estimate {
+            input,
+            quality,
+            no_optimize,
+            json,
+        } => {
+            let video = probe_video(&engines.ffprobe, &input, None, &ProcessManager::new()).await?;
+            let samples = catalog::runtime_samples().await;
+            let acceleration = check_colmap_acceleration_cached(&engines).await;
+            let memory = acceleration.planning_gpu_total_memory_mb();
+            let (width, height) = if video.rotation.rem_euclid(180) == 90 {
+                (video.height, video.width)
+            } else {
+                (video.width, video.height)
+            };
+            let qualities = quality.map_or_else(
+                || vec![Quality::Fast, Quality::Balanced, Quality::High],
+                |quality| vec![quality],
+            );
+            let mut rows = Vec::new();
+            for quality in qualities {
+                let plan = if no_optimize {
+                    UniformRatioFrameSelection.create_plan(&video, &quality.preset())
+                } else {
+                    QualityV2FrameSelection.create_plan(&video, &quality.preset())
+                };
+                let resolution = (!no_optimize)
+                    .then(|| resolve_planner_resolution_plan(quality, memory, width, height, true));
+                let brush = resolution.map_or_else(
+                    || resolve_brush_training_preset(quality, false, memory, width.max(height), 0),
+                    |resolution| {
+                        resolve_brush_training_preset_for_plan(
+                            quality,
+                            memory,
+                            width.max(height),
+                            0,
+                            &resolution,
+                        )
+                    },
+                );
+                let estimate = estimate_runtime_with_brush_and_resolution(
+                    &video,
+                    &plan,
+                    quality,
+                    &samples,
+                    Some(&brush),
+                    resolution.map(|r| r.policy_version),
+                    resolution.map_or(width.max(height), |r| r.working_long_edge()),
+                );
+                rows.push(serde_json::json!({
+                    "quality": quality, "plan": plan, "estimate": estimate,
+                }));
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "input": input, "video": video, "optimize": !no_optimize, "modes": rows,
+                    }))?
+                );
+            } else {
+                println!(
+                    "视频: {}（{:.1} 秒，{}×{}）",
+                    input.display(),
+                    video.duration,
+                    video.width,
+                    video.height
+                );
+                println!("自动优化: {}", !no_optimize);
+                println!("模式        预计总耗时范围（分钟）   参考值（分钟）   计划帧数   置信度 / 历史样本");
+                for row in &rows {
+                    let estimate = &row["estimate"];
+                    println!(
+                        "{:<10}  {:.1}–{:.1}                 {:.1}             {}       {} / {}",
+                        row["quality"].as_str().unwrap_or("-"),
+                        estimate["lowerBoundMs"].as_f64().unwrap_or(0.0) / 60_000.0,
+                        estimate["upperBoundMs"].as_f64().unwrap_or(0.0) / 60_000.0,
+                        estimate["estimatedMs"].as_f64().unwrap_or(0.0) / 60_000.0,
+                        row["plan"]["estimatedFrames"],
+                        estimate["confidence"].as_str().unwrap_or("low"),
+                        estimate["sampleCount"]
+                    );
+                    println!("  依据: {}", estimate["basis"].as_str().unwrap_or("-"));
+                }
+                println!("范围仅供选择，不含排队和首次编译；视频内容、实际优化和 GPU 负载会影响耗时。未抽帧或启动生成任务。");
+            }
         }
         Commands::Extract {
             input,
@@ -195,7 +301,7 @@ async fn execute(cli: Cli) -> Result<()> {
                 );
             });
             let root = projects_root.unwrap_or_else(|| PathBuf::from("projects"));
-            let run = runner.generate_for_diagnostics(&input, quality, &root);
+            let run = runner.generate(&input, quality, &root);
             tokio::pin!(run);
             let result = tokio::select! {
                 result = &mut run => result,
