@@ -1,5 +1,7 @@
 # Splat Server（OOOSplat 无界面修改版）
 
+上游更新采用[选择性跟进](docs/upstream-sync.md)：保留服务器所需的重建、训练和 Linux 修复，逐项记录已移植、跳过及候选更新。
+
 在 **Ubuntu 22.04 x86_64 原生运行，不使用 Docker**。视频 → 抽帧 → COLMAP 重建 → Brush 训练 → `final.ply`。保留 `fast` / `balanced` / `high` 三档和默认开启的自动优化；任务后台执行，可通过 `watch` 查看详情。
 
 已移除 React/Tauri GUI、模型预览编辑、HTML/视频导出、MCP 和遥测。`src-tauri/` 只是历史目录名，现为普通 Rust crate，不依赖 Tauri、GTK 或 WebKit。Python 只使用标准库；Node 用于引擎构建检查，不需要安装前端 npm 依赖。

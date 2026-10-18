@@ -2,6 +2,8 @@
 
 This fork provides a headless pipeline. Read [README.md](README.md) for deployment and testing.
 
+For upstream updates, follow [the selective sync policy](docs/upstream-sync.md) and record the reviewed commit in `config/upstream-tracking.json`. Preserve the server-specific changes; do not merge the entire upstream desktop application.
+
 - `src-tauri/src/`: Rust pipeline, engine adapters, automatic optimization and project files. No desktop runtime.
 - `scripts/splat.py`: detached jobs, file locking, cancellation, status/watch.
 - `tests/test_jobs.py`: supervision integration tests using a fake core executable.
