@@ -2,10 +2,10 @@
 
 Headless OOOSplat modification for **native Ubuntu 22.04 x86_64**, without Docker. Video ingestion, `fast` / `balanced` / `high` generation, automatic optimization, detached jobs and terminal monitoring are retained. Desktop UI, viewer/editor, MCP and telemetry are removed.
 
-See [README.md](README.md) for prerequisites. Native build and synthetic-video end-to-end testing passed on Ubuntu 22.04.5 / RTX 5090 / CUDA Toolkit 13.0 on 2026-10-18: fast mode with optimization, 36/36 registered frames, 8,000 Vulkan training steps, and a valid final.ply. CUDA 12.8/13.2 builds and balanced/high full training have not been separately exercised. See [test record](docs/ubuntu-smoke-test.md).
+See [README.md](README.md) for prerequisites. Native build and synthetic-video end-to-end testing passed on Ubuntu 22.04.5 / RTX 5090 / CUDA Toolkit 13.0 on 2026-10-18: fast mode with optimization, 36/36 registered frames, 8,000 Vulkan training steps, and a valid final.ply. CUDA Toolkit 12.9.86 also passed native compilation and the same end-to-end test on Ubuntu 22.04.5 / RTX 5090 on 2026-10-25 (driver 590.44.01). CUDA 12.8/13.2 builds and balanced/high full training have not been separately exercised. See [test record](docs/ubuntu-smoke-test.md).
 
 ```bash
-# CUDA 12.8 / 13.0 / 13.2 Toolkit accepted for cuda; CPU COLMAP is also available.
+# CUDA 12.8 / 12.9 / 13.0 / 13.2 Toolkit accepted for cuda; CPU COLMAP is also available.
 bash scripts/setup-engines-linux.sh cuda  # alternatively: cpu
 bash scripts/verify-engines-linux.sh
 ./splat health

@@ -6,7 +6,7 @@
 
 已移除 React/Tauri GUI、模型预览编辑、HTML/视频导出、MCP 和遥测。`src-tauri/` 只是历史目录名，现为普通 Rust crate，不依赖 Tauri、GTK 或 WebKit。Python 只使用标准库；Node 用于引擎构建检查，不需要安装前端 npm 依赖。
 
-**已于 2026-10-18 在 Ubuntu 22.04.5 / RTX 5090 / CUDA Toolkit 13.0 完成原生编译和合成视频端到端测试。** 快速档开启自动优化，36/36 帧注册成功，完成 8000 步 Vulkan GPU 训练并输出 `final.ply`。CUDA 12.8 / 13.2 接受构建，但尚未分别实机验证；balanced/high 已检查计划入口，未执行完整训练。详见 [实测记录](docs/ubuntu-smoke-test.md)。
+**已于 2026-10-18 在 Ubuntu 22.04.5 / RTX 5090 / CUDA Toolkit 13.0 完成原生编译和合成视频端到端测试，并于 2026-10-25 在同系统/GPU、CUDA Toolkit 12.9.86 上再次通过。** 快速档开启自动优化，36/36 帧注册成功，完成 8000 步 Vulkan GPU 训练并输出 `final.ply`。CUDA 12.8 / 13.2 接受构建，但尚未分别实机验证；balanced/high 已检查计划入口，未执行完整训练。详见 [实测记录](docs/ubuntu-smoke-test.md)。
 
 ## 1. 准备 Ubuntu 22.04
 
@@ -28,7 +28,7 @@ sudo apt-get install -y --no-install-recommends \
 - **rustup**：按 [Rust 安装说明](https://www.rust-lang.org/tools/install) 安装。构建脚本会安装并使用 Rust **1.95.0**。
 - **Node.js 22.13+**：从 [Node.js 官方下载页](https://nodejs.org/en/download) 安装；Ubuntu 22.04 默认仓库中的旧 Node 版本不适用。
 - **GPU 驱动与 Vulkan**：Brush 是无窗口 CLI，但训练仍需可用的 Vulkan GPU；先运行 `vulkaninfo --summary` 检查设备。没有桌面会话也可以运行，无需 Xvfb。软件 Vulkan/CPU-only 训练未验收。
-- **CUDA 模式额外要求**：原生构建接受 CUDA Toolkit **12.8 / 13.0 / 13.2**，需要 `nvcc`，不是只有 NVIDIA 驱动。默认路径 `/usr/local/cuda`，可设置 `CUDA_PATH`。默认只为本机 GPU 架构编译（`native`），可用 `OOOSPLAT_CUDA_ARCHITECTURES` 指定其他架构。运行时自动选择 NVIDIA CUDA 的门槛仍是驱动 **580.00+**、Compute Capability **7.5+**。脚本不自动安装或改动驱动/Toolkit。
+- **CUDA 模式额外要求**：原生构建接受 CUDA Toolkit **12.8 / 12.9 / 13.0 / 13.2**，需要 `nvcc`，不是只有 NVIDIA 驱动。默认路径 `/usr/local/cuda`，可设置 `CUDA_PATH`。默认只为本机 GPU 架构编译（`native`），可用 `OOOSPLAT_CUDA_ARCHITECTURES` 指定其他架构。运行时自动选择 NVIDIA CUDA 的门槛仍是驱动 **580.00+**、Compute Capability **7.5+**。脚本不自动安装或改动驱动/Toolkit。
 
 为避免大核数宿主机上 OpenBLAS 并发池溢出，COLMAP 子进程限制 OpenBLAS 为 1 线程、OpenMP 最多 8 线程，并显式设置闭环检索线程数为 8；闭环匹配仍保持开启。
 

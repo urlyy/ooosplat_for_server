@@ -9,7 +9,7 @@ spec.loader.exec_module(cuda)
 
 class NativeCudaTest(unittest.TestCase):
     def test_supported_toolkits(self):
-        for version in ('12.8', '13.0', '13.2'):
+        for version in ('12.8', '12.9', '13.0', '13.2'):
             parsed = cuda.parse_version(f'Cuda compilation tools, release {version}, V{version}.88')
             self.assertEqual(parsed['release'], version)
 

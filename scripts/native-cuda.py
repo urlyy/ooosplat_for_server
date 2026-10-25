@@ -9,8 +9,8 @@ import subprocess
 
 def parse_version(output):
     match = re.search(r'release (\d+\.\d+), V([\d.]+)', output)
-    if not match or match[1] not in {'12.8', '13.0', '13.2'}:
-        raise ValueError('Native builds require CUDA Toolkit 12.8, 13.0 or 13.2 (nvcc), not only a driver')
+    if not match or match[1] not in {'12.8', '12.9', '13.0', '13.2'}:
+        raise ValueError('Native builds require CUDA Toolkit 12.8, 12.9, 13.0 or 13.2 (nvcc), not only a driver')
     return dict(release=match[1], compilerVersion=match[2])
 
 

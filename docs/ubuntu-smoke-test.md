@@ -34,3 +34,20 @@ JOB=$(./splat submit /tmp/splat-orbit.mp4 --quality fast)
 ```
 
 这是合成纹理场景的执行验收，不代表真实拍摄视频的重建质量。CUDA 12.8/13.2、balanced/high 完整训练未在本次分别执行。
+
+
+## 2026-10-25：CUDA Toolkit 12.9 实测
+
+Ubuntu 22.04.5 x86_64、RTX 5090（32 GB）、NVIDIA 驱动 590.44.01，实际 nvcc 为 **12.9.86**。原生构建的版本检查加入 12.9 后，未修改 COLMAP、Caspar 或 Brush 源码，即完成锁定版本的源码编译、引擎清单/ABI/CLI 验证和 `./splat health`。构建记录 `CUDA-BUILD.json` 确认编译器为 `/usr/local/cuda-12.9/bin/nvcc`，架构为 `native`；没有使用备用的 CUDA 13.0 编译。
+
+使用上述合成视频生成器，fast 模式、默认自动优化开启的后台任务通过完整流水线：
+
+- COLMAP 使用 NVIDIA CUDA / Caspar GPU，36/36 帧注册成功，13,492 个稀疏点。
+- Brush 在 RTX 5090 的 Vulkan 后端完成 8,000 步训练。
+- 输出 `final.ply`：21,221,083 字节、89,913 个 Splat，校验通过，无告警。
+- 流水线耗时 81,630 ms（不含首次编译），任务状态 `completed`，退出码 0。
+- 验收任务 ID：`74f2857b-54f4-42ff-a2dd-b0e4f1855b5f`。
+
+构建时使用 Rust 1.95.0、Node.js 22.23.4、CMake 4.3.2、Ninja 1.13.2。数据盘曾触发账户配额限制，将 `.cache/native-linux` 迁移至系统盘并在原路径保留符号链接后完成构建；项目、运行时和任务输出仍在数据盘。共享盘的 `df` 空闲空间不代表账户可用配额。
+
+本次验证的是 CUDA 12.9.86 的原生编译与 fast 合成视频端到端执行；CUDA 12.8/13.2、balanced/high 完整训练仍未分别实测。
