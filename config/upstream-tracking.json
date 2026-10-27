@@ -2,10 +2,12 @@
   "repository": "https://github.com/ooolabdev/ooosplat.git",
   "branch": "main",
   "fork_point": "9cd6b5ab1364f2b24ddaafc61192e3735a4601c9",
-  "rebase_base": "410859b91850a7b3591878809f3bf11febe3fb64",
+  "rebase_base": "fbea25999948fcbf2b874fccebd8b13c02f8e198",
   "sync_strategy": "rebase-server-changes-with-feature-filtering",
-  "reviewed_through": "410859b91850a7b3591878809f3bf11febe3fb64",
-  "reviewed_on": "2026-10-18",
+  "reviewed_through": "fbea25999948fcbf2b874fccebd8b13c02f8e198",
+  "reviewed_on": "2026-10-28",
   "policy": "docs/upstream-sync.md",
-  "deferred_commits": ["410859b91850a7b3591878809f3bf11febe3fb64"]
+  "deferred_commits": [
+    "410859b91850a7b3591878809f3bf11febe3fb64"
+  ]
 }

@@ -1,6 +1,7 @@
 //! Headless pipeline; no desktop runtime or network telemetry.
 pub mod engines;
 pub mod error;
+pub mod failure;
 pub mod imports;
 pub mod pipeline;
 pub mod planner;

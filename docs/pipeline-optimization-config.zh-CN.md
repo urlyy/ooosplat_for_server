@@ -1,5 +1,7 @@
 # 自动优化参数配置
 
+> 当前新任务采用[默认生成与自动重试策略](GENERATION_POLICY.md)。下文显存分档、关闭优化配置和旧 OOM 降级字段仍用于兼容历史快照；新精细档使用原分辨率，普通素材采用[有效像素预算（k=0.5）](FINE_SPLAT_BUDGET.md)，全景保留稀疏点数×40。自动重试只授权减点或补拍方案回退。快速／均衡沿用现有优化配方。
+
 OOOSplat 的重建与训练档位集中定义在 [`config/pipeline-optimization.json`](../config/pipeline-optimization.json)。Rust 代码只负责执行和校验流程，档位参数、显存阈值、Bridge 阈值、Caspar 数据量阈值及 High 的 OOM 降级目标均从该文件读取。
 
 默认配置在编译时嵌入程序，确保正式包和 CI 可复现。开发者也可以在启动进程前设置 `OOOSPLAT_PIPELINE_CONFIG`，指向一份外部 JSON；程序每次启动只读取一次。外部文件不存在、JSON 格式错误、出现未知字段或参数不安全时，会输出原因并回退到内置默认配置，不会使用半份配置。
@@ -12,6 +14,8 @@ npm run dev:local
 ```
 
 修改配置后需要重启应用。`schemaVersion` 当前必须为 `1`。
+
+全景视频／图片另用可选 `panoramaTraining` 配置，不复用下文普通素材的 Brush 配方。三档 `maxSplatsWithoutOptimization` 默认 100 万／200 万／300 万，只用于关闭自动优化；`maxSplats` 仍为开启时的档位总上限 100 万／500 万／1,000 万，再按质量档位与显存取预算。训练仍为 12,000／30,000／45,000 步；完整预算表、初始化点覆盖和单次 OOM 重试见[全景训练配方](PANORAMA_IMAGES_V1.md#全景训练配方-v1)。旧外部配置缺少整个全景配置或新增关闭上限字段时，使用相应内置默认值；既有任务的已保存训练参数保持不变。
 
 ## 自动优化关闭
 

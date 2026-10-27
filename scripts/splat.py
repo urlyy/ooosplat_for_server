@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -78,8 +79,13 @@ def snapshot(path):
 
 def submit(args):
     source = Path(args.input).expanduser().resolve(strict=True)
-    if not source.is_file():
-        raise ValueError('submit requires a video file')
+    if not (source.is_file() or source.is_dir()):
+        raise ValueError('submit requires a video file or image directory')
+    ratio = args.frame_sampling_ratio
+    if ratio is not None and (not math.isfinite(ratio) or not .001 <= ratio <= 1):
+        raise ValueError('frame sampling ratio must be between 0.001 and 1')
+    if ratio is not None and args.no_optimize:
+        raise ValueError('--frame-sampling-ratio requires optimization')
     binary = args.binary.expanduser().resolve(strict=True)
     if not os.access(binary, os.X_OK):
         raise ValueError(f'not executable: {binary}')
@@ -92,7 +98,8 @@ def submit(args):
     path.mkdir(mode=0o700)
     config = dict(id=path.name, input=str(source), quality=args.quality,
                   optimize=not args.no_optimize, binary=str(binary),
-                  engine_dir=engine_dir)
+                  engine_dir=engine_dir, video_projection=args.video_projection,
+                  no_auto_retry=args.no_auto_retry, frame_sampling_ratio=ratio)
     write_json(path / 'request.json', config)
     write_json(path / 'status.json', dict(config, status='queued', created=time.time()))
     # The lock is acquired before publishing the worker, and inherited through exec.
@@ -136,6 +143,12 @@ def worker(args):
                 command += ['--engine-dir', request['engine_dir']]
             command += ['generate', request['input'], '--projects-root', str(path / 'projects'),
                         '--quality', request['quality'], '--events', str(path / 'events.jsonl')]
+            if request.get('video_projection', 'auto') != 'auto':
+                command += ['--video-projection', request['video_projection']]
+            if request.get('no_auto_retry'):
+                command.append('--no-auto-retry')
+            if request.get('frame_sampling_ratio') is not None:
+                command += ['--frame-sampling-ratio', str(request['frame_sampling_ratio'])]
             if not request['optimize']:
                 command.append('--no-optimize')
             state.update(status='running', started=time.time(), command=command)
@@ -205,11 +218,14 @@ def main():
     parser.add_argument('--jobs', type=Path, default=ROOT / 'jobs', help='任务存储目录（同一 GPU 使用同一目录）')
     parser.add_argument('--binary', type=Path, default=ROOT / 'src-tauri/target/release/splatstudio')
     sub = parser.add_subparsers(dest='command', required=True)
-    start = sub.add_parser('submit', help='后台提交视频，返回任务 ID')
+    start = sub.add_parser('submit', help='后台提交视频或图片目录，返回任务 ID')
     start.add_argument('input')
     start.add_argument('--quality', choices=['fast', 'balanced', 'high'], default='balanced')
     start.add_argument('--no-optimize', action='store_true')
     start.add_argument('--engine-dir', type=Path)
+    start.add_argument('--video-projection', choices=['auto', 'perspective', 'equirectangular'], default='auto')
+    start.add_argument('--no-auto-retry', action='store_true')
+    start.add_argument('--frame-sampling-ratio', type=float)
     for name in ['status', 'watch']:
         view = sub.add_parser(name)
         view.add_argument('job')

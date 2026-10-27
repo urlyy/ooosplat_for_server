@@ -139,6 +139,9 @@ pub(crate) fn revalidate_imported_colmap(
         return Err(SplatError::Process("外部 COLMAP 项目缺少稀疏模型".into()));
     }
     let camera = colmap_model::read_single_camera(&colmap.sparse_model_path)?;
+    if camera.model_id == 17 {
+        return Err(SplatError::Process("全景项目暂不支持高清补拍。".into()));
+    }
     let images = colmap_model::read_registered_images(&colmap.sparse_model_path)?;
     if images.is_empty() {
         return Err(SplatError::Process("稀疏模型没有已注册图像".into()));

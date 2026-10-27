@@ -81,6 +81,33 @@ class JobsTest(unittest.TestCase):
         watched = json.loads(self.run_cli('watch', job, '--once', '--json'))
         self.assertEqual(watched['status'], 'completed')
 
+    def test_projection_and_generation_policy_reach_background_core(self):
+        job = self.submit('panorama.mp4', '--video-projection', 'equirectangular',
+                          '--no-auto-retry', '--frame-sampling-ratio', '0.2')
+        state = self.wait(job, {'completed'})
+        command = state['command']
+        self.assertEqual(command[command.index('--video-projection') + 1], 'equirectangular')
+        self.assertIn('--no-auto-retry', command)
+        self.assertEqual(command[command.index('--frame-sampling-ratio') + 1], '0.2')
+
+    def test_image_directory_can_run_as_background_job(self):
+        source = self.root / 'images with spaces'
+        source.mkdir()
+        job = self.run_cli('submit', str(source))
+        self.ids.append(job)
+        state = self.wait(job, {'completed'})
+        self.assertEqual(state['input'], str(source))
+
+    def test_invalid_sampling_rejected_before_job_creation(self):
+        source = self.root / 'input.mp4'
+        source.write_bytes(b'fake video')
+        for flags in [('--frame-sampling-ratio', 'nan'),
+                      ('--frame-sampling-ratio', '1.1'),
+                      ('--frame-sampling-ratio', '0.2', '--no-optimize')]:
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_cli('submit', str(source), *flags)
+        self.assertFalse(self.jobs.exists())
+
     def test_submitted_job_pins_runtime_symlink(self):
         first = self.root / 'release-first'
         second = self.root / 'release-second'

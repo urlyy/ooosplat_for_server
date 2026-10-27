@@ -1,7 +1,7 @@
 {
   "name": "splat-server",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.7.1",
   "license": "Apache-2.0",
   "author": "ooolabdev",
   "repository": {

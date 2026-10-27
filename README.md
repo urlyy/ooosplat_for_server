@@ -8,6 +8,27 @@
 
 **已于 2026-10-18 在 Ubuntu 22.04.5 / RTX 5090 / CUDA Toolkit 13.0 完成原生编译和合成视频端到端测试，并于 2026-10-25 在同系统/GPU、CUDA Toolkit 12.9.86 上再次通过。** 快速档开启自动优化，36/36 帧注册成功，完成 8000 步 Vulkan GPU 训练并输出 `final.ply`。CUDA 12.8 / 13.2 接受构建，但尚未分别实机验证；balanced/high 已检查计划入口，未执行完整训练。详见 [实测记录](docs/ubuntu-smoke-test.md)。
 
+## 0.7.1 核心更新（2026-10-28）
+
+已跟进上游至 `fbea259`，保留 Ubuntu 22.04 原生、无界面运行和 CUDA 12.9 支持。新增全景视频/图片计算流程、失败分类与诊断、新版生成策略及精细档点数预算；后台任务仍按单 GPU 串行执行。
+
+```bash
+# 普通图片目录也可以提交后台任务
+./splat submit /absolute/path/images --quality balanced
+# 完整、单目、2:1 ERP 全景视频；素材格式要求见下方全景文档
+./splat submit /absolute/path/panorama.mp4 --video-projection equirectangular
+# 自定义初始视频抽帧比例；默认开启自动优化和自动失败重试
+./splat submit /absolute/path/video.mp4 --frame-sampling-ratio 0.2 --no-auto-retry
+# 对应的估算也使用同样抽帧比例
+./splat estimate /absolute/path/video.mp4 --frame-sampling-ratio 0.2
+```
+
+这些选项也支持前台 `generate`；`plan`/`extract` 支持抽帧比例。`--no-auto-retry` 控制新版优化流程中的失败重试，`--no-optimize` 保留旧流程；抽帧比例不能和 `--no-optimize` 混用。显式全景投影参数用于视频，图片目录由图片元数据与尺寸检测。`estimate` 仍是普通视频的近似估算，不能当作全景六面训练或重建后精细档点数预算的精确耗时。
+
+新版优化流程的精细档使用原生分辨率及重建后计算的 Splat 上限，不再仅凭显存自动选择较低 High 配方；资源占用可能高于旧版。规则见[生成策略](docs/GENERATION_POLICY.md)和[精细档预算](docs/FINE_SPLAT_BUDGET.md)。[全景视频](docs/PANORAMA_VIDEO_V1.md)、[全景图片](docs/PANORAMA_IMAGES_V1.md)与[补拍核心](docs/RESHOOT_V2.md)沿用上游计算实现；补拍核心没有新增服务器 CLI 入口。
+
+GPS 元数据读取及几何逻辑已纳入依赖，但[原生 GPS 辅助](docs/IMAGE_GPS.md)仍按上游限制只对 Windows x64 开启，Linux 自动保留视觉流程。部分 PNG 焦距兼容处理也仅在识别出受影响的确切引擎版本时生效。本次只做本机自动化验证，未重新进行 Ubuntu/GPU 端到端验收；前述 5090 测试记录对应旧版配方，不代表新增全景或新版 high 档已验收。`docs/` 中导入的上游文档含桌面使用及其作者实测说明，不代表本服务器提供对应 UI 或导出入口。
+
 ## 1. 准备 Ubuntu 22.04
 
 通常使用普通用户构建，只有系统包安装需要 sudo。AutoDL 等只提供 root 的实例可显式设置 `export OOOSPLAT_ALLOW_ROOT_BUILD=1`。构建需要访问 GitHub、crates.io、PyPI 和 vcpkg 上游依赖；首次编译较久，源码、缓存和中间产物会占用较多磁盘。默认使用 4 个编译进程，可用 `OOOSPLAT_BUILD_JOBS` 调整。
@@ -159,7 +180,7 @@ bash -n splat scripts/build-native-linux.sh scripts/setup-engines-linux.sh scrip
 ./splat generate /path/video.mp4 --projects-root ./projects --quality high --events ./events.jsonl
 ```
 
-`plan` 展示静态预设的抽帧预估，实际优化决策以生成事件和 `state.json` 为准。前台 `generate` 不经过后台串行锁，日常运行用 `submit`。Rust 底层还保留图片序列兼容逻辑，后台入口只接受视频文件。
+`plan` 展示静态预设的抽帧预估，实际优化决策以生成事件和 `state.json` 为准。前台 `generate` 不经过后台串行锁，日常运行用 `submit`。后台入口支持视频文件及 JPG/PNG 图片目录。
 
 `./splat` 默认使用本机编译的 `engines/native-linux`；可通过 `OOOSPLAT_ENGINE_DIR` 或提交参数 `--engine-dir` 覆盖。FFmpeg/FFprobe 从 PATH 或 `OOOSPLAT_FFMPEG` / `OOOSPLAT_FFPROBE` 获取。不要用 Ubuntu 默认仓库中的旧 COLMAP 或其他版本的 Brush CLI 替换锁定引擎。
 

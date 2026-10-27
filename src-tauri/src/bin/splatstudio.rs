@@ -3,19 +3,16 @@ use std::{io::Write, path::PathBuf, sync::Mutex};
 use clap::{Parser, Subcommand};
 use ooo_splat::{
     engines::health::check_colmap_acceleration_cached,
-    engines::{ffmpeg::extract_uniform_frames, ffprobe::probe_video},
+    engines::{ffmpeg::extract_selected_frames, ffprobe::probe_video},
     error::{Result, SplatError},
     pipeline::estimate::estimate_runtime_with_brush_and_resolution,
     pipeline::runner::{default_engine_paths, PipelineRunner},
-    presets::{
-        resolve_brush_training_preset, resolve_brush_training_preset_for_plan,
-        resolve_planner_resolution_plan, Quality,
-    },
+    presets::{resolve_brush_training_preset, resolve_brush_training_preset_for_plan, Quality},
     process::ProcessManager,
     project::catalog,
     video::{
         analyze_image_sequence, create_image_plan, prepare_image_sequence, FrameSelectionStrategy,
-        QualityV2FrameSelection, UniformRatioFrameSelection,
+        UniformRatioFrameSelection,
     },
 };
 
@@ -29,6 +26,27 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Debug, Clone, Default, clap::Args)]
+struct PolicyArgs {
+    /// Disable automatic failure retries for this run.
+    #[arg(long)]
+    no_auto_retry: bool,
+    /// Fraction of source video frames to sample (0.001..=1).
+    #[arg(long)]
+    frame_sampling_ratio: Option<f64>,
+}
+
+impl PolicyArgs {
+    fn policy(&self) -> Result<ooo_splat::pipeline::generation_policy::GenerationPolicy> {
+        ooo_splat::pipeline::generation_policy::GenerationPolicy {
+            auto_retry_enabled: !self.no_auto_retry,
+            frame_sampling_ratio: self.frame_sampling_ratio,
+            ..Default::default()
+        }
+        .validate()
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Validate FFmpeg, FFprobe, CPU COLMAP and Brush.
@@ -37,12 +55,16 @@ enum Commands {
     Probe { input: PathBuf },
     /// Show the video frame plan or image-sequence plan.
     Plan {
+        #[command(flatten)]
+        policy: PolicyArgs,
         input: PathBuf,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
         quality: Quality,
     },
     /// Compare estimated total runtime ranges before choosing a video quality.
     Estimate {
+        #[command(flatten)]
+        policy: PolicyArgs,
         input: PathBuf,
         /// Estimate only one mode (default: compare all three).
         #[arg(long, value_enum)]
@@ -56,6 +78,8 @@ enum Commands {
     },
     /// Prepare video frames or an image sequence and optional COLMAP masks.
     Extract {
+        #[command(flatten)]
+        policy: PolicyArgs,
         input: PathBuf,
         output: PathBuf,
         #[arg(long, value_enum, default_value_t = Quality::Balanced)]
@@ -63,6 +87,10 @@ enum Commands {
     },
     /// Run the end-to-end pipeline after all fixed engine CLIs are verified.
     Generate {
+        #[arg(long, value_enum, default_value_t = ooo_splat::video::panorama::VideoProjection::Auto)]
+        video_projection: ooo_splat::video::panorama::VideoProjection,
+        #[command(flatten)]
+        policy: PolicyArgs,
         input: PathBuf,
         /// Output directory (defaults to ./projects).
         #[arg(long)]
@@ -113,22 +141,34 @@ async fn execute(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&video)?);
             }
         }
-        Commands::Plan { input, quality } => {
+        Commands::Plan {
+            input,
+            quality,
+            policy,
+        } => {
+            let policy = policy.policy()?;
             let plan = if input.is_dir() {
                 create_image_plan(&analyze_image_sequence(&input)?, &quality.preset())
             } else {
                 let video =
                     probe_video(&engines.ffprobe, &input, None, &ProcessManager::new()).await?;
-                UniformRatioFrameSelection.create_plan(&video, &quality.preset())
+                policy.frame_plan(&video, quality)
             };
             println!("{}", serde_json::to_string_pretty(&plan)?);
         }
         Commands::Estimate {
+            policy,
             input,
             quality,
             no_optimize,
             json,
         } => {
+            let policy = policy.policy()?;
+            if no_optimize && policy.frame_sampling_ratio.is_some() {
+                return Err(SplatError::Process(
+                    "--frame-sampling-ratio requires optimization".into(),
+                ));
+            }
             let video = probe_video(&engines.ffprobe, &input, None, &ProcessManager::new()).await?;
             let samples = catalog::runtime_samples().await;
             let acceleration = check_colmap_acceleration_cached(&engines).await;
@@ -147,10 +187,10 @@ async fn execute(cli: Cli) -> Result<()> {
                 let plan = if no_optimize {
                     UniformRatioFrameSelection.create_plan(&video, &quality.preset())
                 } else {
-                    QualityV2FrameSelection.create_plan(&video, &quality.preset())
+                    policy.frame_plan(&video, quality)
                 };
-                let resolution = (!no_optimize)
-                    .then(|| resolve_planner_resolution_plan(quality, memory, width, height, true));
+                let resolution =
+                    (!no_optimize).then(|| policy.resolution(quality, memory, width, height, true));
                 let brush = resolution.map_or_else(
                     || resolve_brush_training_preset(quality, false, memory, width.max(height), 0),
                     |resolution| {
@@ -211,10 +251,12 @@ async fn execute(cli: Cli) -> Result<()> {
             }
         }
         Commands::Extract {
+            policy,
             input,
             output,
             quality,
         } => {
+            let policy = policy.policy()?;
             let masks = output
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
@@ -237,16 +279,22 @@ async fn execute(cli: Cli) -> Result<()> {
             ensure_engine(&engines.ffprobe)?;
             ensure_engine(&engines.ffmpeg)?;
             let video = probe_video(&engines.ffprobe, &input, None, &ProcessManager::new()).await?;
-            let plan = UniformRatioFrameSelection.create_plan(&video, &quality.preset());
-            let extraction = extract_uniform_frames(
+            let plan = policy.frame_plan(&video, quality);
+            let (w, h) = if video.rotation.rem_euclid(180) == 90 {
+                (video.height, video.width)
+            } else {
+                (video.width, video.height)
+            };
+            let resolution = policy.resolution(quality, None, w, h, true);
+            let extraction = extract_selected_frames(
                 &engines.ffmpeg,
                 &input,
                 &output,
                 &colmap_frames,
                 &masks,
-                &plan,
+                &plan.selected_frames,
                 video.has_alpha,
-                None,
+                Some((resolution.working_width, resolution.working_height)),
                 None,
                 &ProcessManager::new(),
                 None,
@@ -269,12 +317,20 @@ async fn execute(cli: Cli) -> Result<()> {
             }
         }
         Commands::Generate {
+            policy,
+            video_projection,
             input,
             projects_root,
             quality,
             no_optimize,
             events,
         } => {
+            let policy = policy.policy()?;
+            if no_optimize && policy.frame_sampling_ratio.is_some() {
+                return Err(SplatError::Process(
+                    "--frame-sampling-ratio requires optimization".into(),
+                ));
+            }
             let event_file = events
                 .map(|path| {
                     std::fs::OpenOptions::new()
@@ -299,7 +355,9 @@ async fn execute(cli: Cli) -> Result<()> {
                     "{:>6.2}% {:?}: {}",
                     event.progress, event.stage, event.message
                 );
-            });
+            })
+            .with_video_projection(video_projection)
+            .with_generation_policy((!no_optimize).then_some(policy));
             let root = projects_root.unwrap_or_else(|| PathBuf::from("projects"));
             let run = runner.generate(&input, quality, &root);
             tokio::pin!(run);

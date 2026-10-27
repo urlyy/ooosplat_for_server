@@ -22,3 +22,11 @@ Native builds are installed as immutable directories under `engines/.native-rele
 The historical `src-tauri/` path now holds a plain Rust crate with no Tauri dependency. Apache-2.0; see LICENSE, NOTICE and `licenses/`.
 
 Before submitting, `./splat estimate VIDEO` compares approximate runtime ranges in minutes using the existing estimator, GPU memory planning and comparable completed task history. It does not extract frames or submit work. Use `--quality fast|balanced|high`, `--json`, or `--no-optimize` as needed; match the optimization setting when submitting. Estimates exclude queue/build time and are uncertain, especially without history.
+
+## Upstream 0.7.1 core sync (2026-10-28)
+
+Synced through `fbea259`, preserving the Ubuntu 22.04 headless build, CUDA 12.9 support, job serialization and cancellation. Includes panorama processing, warm-start reshoot core, failure diagnostics and generation policy v2. No new reshoot/export CLI is exposed. Native GPS refinement remains Windows-only; Linux uses visual reconstruction.
+
+Background `submit` accepts image folders and videos, with `--video-projection equirectangular` for ERP videos, `--frame-sampling-ratio 0.2` and `--no-auto-retry`. A custom sampling ratio requires optimization. Matching sampling options are available in `estimate`, which remains an approximate ordinary-video estimate. New High runs use native resolution and a reconstruction-derived Splat budget; resource use can exceed older settings.
+
+The new core passes local automated checks; no new Ubuntu/GPU end-to-end acceptance was performed. Earlier 5090 records apply to their recorded versions and recipes. See the Chinese README and upstream sync log for exact scope.
